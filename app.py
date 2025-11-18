@@ -42,6 +42,7 @@ else:
         st.write(f"Rows: {df.shape[0]}, Columns: {df.shape[1]}")
 
         st.write("### Column Data Types")
+        # Convert types to string to avoid display issues
         types_df = pd.DataFrame({"Column": df.columns, "Data Type": df.dtypes.astype(str).values})
         st.dataframe(types_df)
 
@@ -85,6 +86,8 @@ else:
                     ax.set_title(f"Bar Chart of {x_axis}")
                     ax.set_xlabel(x_axis)
                     ax.set_ylabel("Count")
+                    # Rotate labels if there are many categories
+                    plt.xticks(rotation=45)
                     st.pyplot(fig)
                     plt.close(fig)
             else:
@@ -109,6 +112,11 @@ else:
                 pie_col = st.selectbox("Select categorical column for Pie Chart", categorical_cols)
                 if pie_col:
                     value_counts = df[pie_col].value_counts(dropna=False)
+                    # Limit pie chart to top 10 to avoid clutter
+                    if len(value_counts) > 10:
+                        st.warning("Showing top 10 categories only.")
+                        value_counts = value_counts.head(10)
+                    
                     labels = value_counts.index.astype(str)
                     sizes = value_counts.values
                     fig, ax = plt.subplots(figsize=(8, 8))
@@ -157,6 +165,7 @@ else:
                         sns.boxplot(data=df, x=x_col, y=y_col, ax=ax)
                         ax.set_title(f"Box Plot of {y_col} by {x_col}")
                         ax.set_xlabel(x_col)
+                        plt.xticks(rotation=45)
                     else:
                         sns.boxplot(data=df, y=y_col, ax=ax)
                         ax.set_title(f"Box Plot of {y_col}")
@@ -180,4 +189,4 @@ else:
 
         if st.button("Reset loaded dataset (clear from session)"):
             st.session_state.df = None
-            st.experimental_rerun()
+            st.rerun()
