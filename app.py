@@ -88,7 +88,7 @@ else:
                     ax.set_xlabel(x_axis)
                     ax.set_ylabel("Contagem")
                     # Rotacionar rótulos se houver muitas categorias
-                    plt.xticks(rotation=45)
+                    plt.xticks(rotation=90)
                     st.pyplot(fig)
                     plt.close(fig)
             else:
@@ -166,7 +166,7 @@ else:
                         sns.boxplot(data=df, x=x_col, y=y_col, ax=ax)
                         ax.set_title(f"Box Plot de {y_col} por {x_col}")
                         ax.set_xlabel(x_col)
-                        plt.xticks(rotation=45)
+                        plt.xticks(rotation=90)
                     else:
                         sns.boxplot(data=df, y=y_col, ax=ax)
                         ax.set_title(f"Box Plot de {y_col}")
