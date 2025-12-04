@@ -83,9 +83,18 @@ else:
             if categorical_cols:
                 x_axis = st.selectbox("Selecione a coluna categórica para o eixo X", categorical_cols)
                 if x_axis:
+                    # --- MODIFICAÇÃO PARA ORDEM ALFABÉTICA ---
+                    # 1. Pegamos os valores únicos
+                    # 2. Removemos valores nulos (dropna) para não quebrar a ordenação
+                    # 3. Usamos sorted() para ordenar alfabeticamente
+                    ordem_alfabetica = sorted(df[x_axis].dropna().unique())
+                    
                     fig, ax = plt.subplots(figsize=(10, 6))
-                    sns.countplot(data=df, x=x_axis, ax=ax)
-                    ax.set_title(f"Gráfico de Barras de {x_axis}")
+                    
+                    # Passamos o parâmetro 'order'
+                    sns.countplot(data=df, x=x_axis, ax=ax, order=ordem_alfabetica)
+                    
+                    ax.set_title(f"Gráfico de Barras de {x_axis} (Ordem Alfabética)")
                     ax.set_xlabel(x_axis)
                     ax.set_ylabel("Contagem")
                     # Rotacionar rótulos se houver muitas categorias
@@ -164,7 +173,9 @@ else:
                 if y_col:
                     fig, ax = plt.subplots(figsize=(10, 6))
                     if x_col != "Nenhuma":
-                        sns.boxplot(data=df, x=x_col, y=y_col, ax=ax)
+                        # Também ordenamos o Boxplot se tiver eixo X
+                        ordem_box = sorted(df[x_col].dropna().unique())
+                        sns.boxplot(data=df, x=x_col, y=y_col, ax=ax, order=ordem_box)
                         ax.set_title(f"Box Plot de {y_col} por {x_col}")
                         ax.set_xlabel(x_col)
                         plt.xticks(rotation=90)
