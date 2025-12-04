@@ -94,7 +94,7 @@ else:
                     # Passamos o parâmetro 'order'
                     sns.countplot(data=df, x=x_axis, ax=ax, order=ordem_alfabetica)
                     
-                    ax.set_title(f"Gráfico de Barras de {x_axis} (Ordem Alfabética)")
+                    ax.set_title(f"Gráfico de Barras de {x_axis}")
                     ax.set_xlabel(x_axis)
                     ax.set_ylabel("Contagem")
                     # Rotacionar rótulos se houver muitas categorias
