@@ -1,4 +1,3 @@
-# app criado com o gemini
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -6,7 +5,7 @@ import seaborn as sns
 
 # Configurar página uma vez
 st.set_page_config(layout="wide")
-st.title("Explorador de Dados CSV")
+st.title("Explorador de Dados Excel")
 
 # Inicializar chave de estado da sessão
 if "df" not in st.session_state:
@@ -14,18 +13,20 @@ if "df" not in st.session_state:
 
 # Carregador de arquivos na barra lateral
 with st.sidebar:
-    uploaded_file = st.file_uploader("Carregue seu arquivo CSV aqui", type=["csv"])
+    # Alterado para aceitar .xlsx
+    uploaded_file = st.file_uploader("Carregue seu arquivo Excel (XLSX) aqui", type=["xlsx"])
     if uploaded_file is not None:
         try:
-            df = pd.read_csv(uploaded_file)
+            # Alterado para read_excel
+            df = pd.read_excel(uploaded_file)
             st.session_state.df = df
-            st.success("Arquivo CSV carregado com sucesso!")
+            st.success("Arquivo Excel carregado com sucesso!")
         except Exception as e:
-            st.error(f"Erro ao ler o CSV: {e}")
+            st.error(f"Erro ao ler o arquivo Excel: {e}")
 
 # Se não houver dataframe ainda, mostrar info e parar
 if st.session_state.df is None:
-    st.info("Por favor, carregue um arquivo CSV para começar.")
+    st.info("Por favor, carregue um arquivo Excel (.xlsx) para começar.")
 else:
     df = st.session_state.df
 
