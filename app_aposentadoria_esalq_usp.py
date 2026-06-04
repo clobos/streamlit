@@ -1,3 +1,8 @@
+#py -m venv .venv
+#.venv\Scripts\activate.bat 
+#py -m pip install --upgrade pip
+#py -m pip install streamlit openpyxl
+#py -m streamlit run app_aposentadoria_esalq_usp.py
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -9,10 +14,11 @@ st.title("Aposentadoria ESALQ USP")
 
 st.markdown("""
 Faça upload de um arquivo **.xlsx**.  
-O app possui duas abas:
+O app possui três abas:
 
 1. **Histograma filtrado por nível de categoria**
 2. **Tabela de contingência e gráfico de barras com duas variáveis categóricas**
+3. **Análise descritiva das variáveis numéricas e categóricas**
 """)
 
 # ---------------------------------------------------
@@ -69,6 +75,50 @@ def tabela_frequencia_dupla(df, var_cat1, var_cat2):
     return freq
 
 
+def analise_descritiva_numericas(df, numericas):
+    resumo = df[numericas].describe().T
+    resumo["mediana"] = df[numericas].median()
+    resumo["variancia"] = df[numericas].var()
+    resumo["desvio_padrao"] = df[numericas].std()
+    resumo["coef_variacao_%"] = (resumo["desvio_padrao"] / resumo["mean"]) * 100
+    resumo["valores_ausentes"] = df[numericas].isna().sum()
+    resumo["percentual_ausentes_%"] = df[numericas].isna().mean() * 100
+    resumo = resumo.reset_index().rename(columns={"index": "variavel"})
+    return resumo
+
+
+def analise_descritiva_categoricas(df, categoricas):
+    lista = []
+
+    for col in categoricas:
+        serie = df[col]
+
+        total = len(serie)
+        ausentes = serie.isna().sum()
+        validos = total - ausentes
+        categorias_unicas = serie.nunique(dropna=True)
+
+        moda = serie.mode(dropna=True)
+        moda_valor = moda.iloc[0] if len(moda) > 0 else np.nan
+
+        freq_moda = serie.value_counts(dropna=True).iloc[0] if validos > 0 else 0
+        perc_moda = (freq_moda / validos) * 100 if validos > 0 else 0
+
+        lista.append({
+            "variavel": col,
+            "total_observacoes": total,
+            "valores_validos": validos,
+            "valores_ausentes": ausentes,
+            "percentual_ausentes_%": (ausentes / total) * 100 if total > 0 else 0,
+            "categorias_unicas": categorias_unicas,
+            "categoria_mais_frequente": moda_valor,
+            "frequencia_categoria_mais_frequente": freq_moda,
+            "percentual_categoria_mais_frequente_%": perc_moda
+        })
+
+    return pd.DataFrame(lista)
+
+
 # ---------------------------------------------------
 # Upload
 # ---------------------------------------------------
@@ -100,9 +150,10 @@ if arquivo is not None:
         if len(categoricas) == 0:
             st.warning("Não foram encontradas variáveis categóricas.")
 
-        aba1, aba2 = st.tabs([
+        aba1, aba2, aba3 = st.tabs([
             "Histograma",
-            "Tabela de contingência"
+            "Tabela de contingência",
+            "Análise Descritiva"
         ])
 
         # ===================================================
@@ -284,7 +335,6 @@ if arquivo is not None:
                     dados_cont[var_cat1] = dados_cont[var_cat1].astype(str)
                     dados_cont[var_cat2] = dados_cont[var_cat2].astype(str)
 
-                    # Tabela de contingência em formato cruzado
                     tabela_contingencia = pd.crosstab(
                         dados_cont[var_cat1],
                         dados_cont[var_cat2],
@@ -299,7 +349,6 @@ if arquivo is not None:
                         use_container_width=True
                     )
 
-                    # Tabela em formato longo para o gráfico
                     tabela_grafico = tabela_frequencia_dupla(
                         dados_cont,
                         var_cat1,
@@ -360,14 +409,119 @@ if arquivo is not None:
                         mime="text/csv"
                     )
 
-                    csv_grafico = tabela_grafico.to_csv(index=False).encode("utf-8")
+        # ===================================================
+        # ABA 3 — ANÁLISE DESCRITIVA
+        # ===================================================
+        with aba3:
 
-                    st.download_button(
-                        label="Baixar tabela do gráfico em CSV",
-                        data=csv_grafico,
-                        file_name="tabela_frequencias_categoricas.csv",
-                        mime="text/csv"
-                    )
+            st.header("Análise descritiva das variáveis")
+
+            st.subheader("Resumo geral do banco de dados")
+
+            col1, col2, col3, col4 = st.columns(4)
+
+            col1.metric("Número de linhas", df.shape[0])
+            col2.metric("Número de colunas", df.shape[1])
+            col3.metric("Variáveis numéricas", len(numericas))
+            col4.metric("Variáveis categóricas", len(categoricas))
+
+            st.divider()
+
+            st.subheader("Análise descritiva das variáveis numéricas")
+
+            if len(numericas) == 0:
+                st.warning("Não há variáveis numéricas para descrever.")
+            else:
+                resumo_num = analise_descritiva_numericas(df, numericas)
+
+                st.dataframe(
+                    resumo_num,
+                    use_container_width=True
+                )
+
+                csv_num = resumo_num.to_csv(index=False).encode("utf-8")
+
+                st.download_button(
+                    label="Baixar análise descritiva das variáveis numéricas em CSV",
+                    data=csv_num,
+                    file_name="analise_descritiva_numericas.csv",
+                    mime="text/csv"
+                )
+
+            st.divider()
+
+            st.subheader("Análise descritiva das variáveis categóricas")
+
+            if len(categoricas) == 0:
+                st.warning("Não há variáveis categóricas para descrever.")
+            else:
+                resumo_cat = analise_descritiva_categoricas(df, categoricas)
+
+                st.dataframe(
+                    resumo_cat,
+                    use_container_width=True
+                )
+
+                csv_cat = resumo_cat.to_csv(index=False).encode("utf-8")
+
+                st.download_button(
+                    label="Baixar análise descritiva das variáveis categóricas em CSV",
+                    data=csv_cat,
+                    file_name="analise_descritiva_categoricas.csv",
+                    mime="text/csv"
+                )
+
+                st.subheader("Tabela de frequência por variável categórica")
+
+                var_cat_desc = st.selectbox(
+                    "Escolha uma variável categórica para ver a frequência",
+                    categoricas,
+                    key="var_cat_desc"
+                )
+
+                tabela_freq = (
+                    df[var_cat_desc]
+                    .astype("object")
+                    .fillna("Ausente")
+                    .value_counts()
+                    .reset_index()
+                )
+
+                tabela_freq.columns = [var_cat_desc, "frequencia"]
+                tabela_freq["percentual_%"] = (
+                    tabela_freq["frequencia"] / tabela_freq["frequencia"].sum()
+                ) * 100
+
+                st.dataframe(
+                    tabela_freq,
+                    use_container_width=True
+                )
+
+                fig_freq = px.bar(
+                    tabela_freq,
+                    x=var_cat_desc,
+                    y="frequencia",
+                    text="frequencia",
+                    title=f"Frequência das categorias de {var_cat_desc}"
+                )
+
+                fig_freq.update_layout(
+                    template="plotly_white",
+                    height=600,
+                    xaxis_title=var_cat_desc,
+                    yaxis_title="Frequência",
+                    xaxis=dict(
+                        title_font=dict(size=22),
+                        tickfont=dict(size=16)
+                    ),
+                    yaxis=dict(
+                        title_font=dict(size=22),
+                        tickfont=dict(size=16)
+                    ),
+                    title_font=dict(size=22)
+                )
+
+                st.plotly_chart(fig_freq, use_container_width=True)
 
     except Exception as e:
         st.error(f"Erro ao ler ou processar o arquivo: {e}")
