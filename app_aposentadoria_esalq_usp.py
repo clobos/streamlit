@@ -56,7 +56,7 @@ FONTE_TITULO_FIGURA = 18
 FONTE_EIXOS = 20
 FONTE_NIVEIS = 20
 FONTE_LEGENDA = 20
-FONTE_ROTULOS_BARRAS = 20
+FONTE_ROTULOS_BARRAS = 24
 
 
 # ------------------------------------------------------------
@@ -1229,7 +1229,7 @@ def exibir_histogramas_por_nivel(
         template="plotly_white",
         height=altura,
         showlegend=False,
-        bargap=0.05,
+        bargap=0.00,
         margin=dict(t=110, r=40, b=100, l=90)
     )
 
