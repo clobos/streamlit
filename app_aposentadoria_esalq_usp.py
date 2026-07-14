@@ -1,99 +1,215 @@
-#---------------------------------------------------
-#Para um projeto novo no Windows, eu recomendaria:
-#---------------------------------------------------
-#py -m venv .venv
-#.venv\Scripts\activate.bat
-#python -m pip install --upgrade pip
-#python -m pip install streamlit pandas numpy openpyxl plotly
-#python -m streamlit run app_aposentadoria_esalq_usp.py
-#---------------------------------------------------
-#Para as próximas vezes, normalmente basta:
-#---------------------------------------------------
-#.venv\Scripts\activate.bat
-#python -m streamlit run app_aposentadoria_esalq_usp.py
-#py -m streamlit run app_aposentadoria_esalq_usp.py
-#---------------------------------------------------
+# ------------------------------------------------------------
+# APLICATIVO STREAMLIT — APOSENTADORIA ESALQ/USP
+# ------------------------------------------------------------
+# Instalação no Windows:
+# py -m venv .venv
+# .venv\Scripts\activate.bat
+# python -m pip install --upgrade pip
+# python -m pip install streamlit pandas numpy openpyxl plotly
+#
+# Execução:
+# python -m streamlit run app_aposentadoria_esalq_usp_corrigido.py
+# ------------------------------------------------------------
+
+from io import BytesIO
+import warnings
+
 import numpy as np
 import pandas as pd
-import streamlit as st
 import plotly.express as px
+import streamlit as st
 
-st.set_page_config(page_title="App de Gráficos com XLSX", layout="wide")
+
+# ------------------------------------------------------------
+# Configuração geral
+# ------------------------------------------------------------
+st.set_page_config(
+    page_title="App de Gráficos com XLSX",
+    layout="wide"
+)
 
 st.title("Aposentadoria ESALQ USP")
 
-st.markdown("""
-Faça upload de um arquivo **.xlsx**.  
-O app possui seis abas:
+st.markdown(
+    """
+    Faça upload de um arquivo **.xlsx** e escolha uma análise no menu lateral.
 
-1. **Histograma filtrado por nível de categoria**
-2. **Tabela de contingência e gráfico de barras com duas variáveis categóricas**
-3. **Análise descritiva das variáveis numéricas e categóricas**
-4. **Frequências absolutas e relativas de uma variável categórica**
-5. **Histogramas comparativos para todos os níveis de uma variável categórica**
-6. **Gráfico de barras e tabela de contingência com três variáveis categóricas**
-""")
+    O aplicativo possui seis análises:
 
-# ---------------------------------------------------
-# Funções auxiliares
-# ---------------------------------------------------
-@st.cache_data
-def carregar_excel(arquivo, sheet_name=0):
-    return pd.read_excel(arquivo, sheet_name=sheet_name)
+    1. **Histograma filtrado por nível de uma variável categórica**
+    2. **Tabela de contingência entre duas variáveis categóricas**
+    3. **Análise descritiva das variáveis numéricas e categóricas**
+    4. **Frequências absolutas e relativas de uma variável categórica**
+    5. **Histogramas comparativos por nível de uma variável categórica**
+    6. **Gráfico de barras e contingência com três variáveis categóricas**
+
+    O menu lateral substitui as abas para que apenas a análise selecionada
+    seja executada. Isso reduz o uso de memória no Streamlit Community Cloud.
+    """
+)
 
 
-def preparar_dados(df):
+# ------------------------------------------------------------
+# Constantes de formatação
+# ------------------------------------------------------------
+FONTE_TITULO_FIGURA = 18
+FONTE_EIXOS = 20
+FONTE_NIVEIS = 20
+FONTE_LEGENDA = 20
+FONTE_ROTULOS_BARRAS = 20
+
+
+# ------------------------------------------------------------
+# Leitura e preparação dos dados
+# ------------------------------------------------------------
+@st.cache_data(show_spinner=False)
+def listar_abas_excel(conteudo_arquivo: bytes) -> list[str]:
+    """Retorna os nomes das planilhas do arquivo Excel."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"Failed to load a conditional formatting rule.*",
+            category=UserWarning
+        )
+        xls = pd.ExcelFile(
+            BytesIO(conteudo_arquivo),
+            engine="openpyxl"
+        )
+        return xls.sheet_names
+
+
+@st.cache_data(show_spinner=False)
+def carregar_excel(
+    conteudo_arquivo: bytes,
+    sheet_name: str
+) -> pd.DataFrame:
+    """Lê uma planilha específica do arquivo Excel."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"Failed to load a conditional formatting rule.*",
+            category=UserWarning
+        )
+        return pd.read_excel(
+            BytesIO(conteudo_arquivo),
+            sheet_name=sheet_name,
+            engine="openpyxl"
+        )
+
+
+def preparar_dados(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Limpa espaços vazios e converte para número somente as colunas
+    em que todos os valores não ausentes podem ser convertidos.
+
+    Esta implementação não usa errors="ignore", que foi descontinuado
+    nas versões recentes do pandas.
+    """
     df2 = df.copy()
 
-    for col in df2.columns:
-        if df2[col].dtype == "object":
-            df2[col] = df2[col].replace(r"^\s*$", np.nan, regex=True)
+    colunas_texto = df2.select_dtypes(
+        include=["object", "string"]
+    ).columns.tolist()
 
-    for col in df2.columns:
-        if df2[col].dtype == "object":
-            df2[col] = pd.to_numeric(df2[col], errors="ignore")
+    for coluna in colunas_texto:
+        df2[coluna] = df2[coluna].replace(
+            r"^\s*$",
+            np.nan,
+            regex=True
+        )
+
+    for coluna in colunas_texto:
+        serie_original = df2[coluna]
+        serie_convertida = pd.to_numeric(
+            serie_original,
+            errors="coerce"
+        )
+
+        n_validos_original = int(serie_original.notna().sum())
+        n_validos_convertido = int(serie_convertida.notna().sum())
+
+        if (
+            n_validos_original > 0
+            and n_validos_original == n_validos_convertido
+        ):
+            df2[coluna] = serie_convertida
 
     return df2
 
 
-def classificar_variaveis(df):
-    numericas = df.select_dtypes(include=np.number).columns.tolist()
+def classificar_variaveis(
+    df: pd.DataFrame
+) -> tuple[list[str], list[str]]:
+    """Classifica as colunas em numéricas e categóricas."""
+    numericas = df.select_dtypes(
+        include=[np.number]
+    ).columns.tolist()
 
     categoricas = df.select_dtypes(
-        include=["object", "category", "bool"]
+        include=["object", "string", "category", "bool"]
     ).columns.tolist()
 
     datas = df.select_dtypes(
         include=["datetime64[ns]", "datetime64[ns, UTC]"]
     ).columns.tolist()
 
-    categoricas = categoricas + [c for c in datas if c not in categoricas]
+    categoricas.extend(
+        coluna for coluna in datas
+        if coluna not in categoricas
+    )
 
     return numericas, categoricas
 
 
-def resumo_variavel(df, var_num):
+# ------------------------------------------------------------
+# Funções estatísticas e tabelas
+# ------------------------------------------------------------
+def resumo_variavel(
+    df: pd.DataFrame,
+    var_num: str
+) -> pd.DataFrame:
+    """Retorna o resumo descritivo de uma variável numérica."""
     return df[var_num].describe().to_frame().T
 
 
-def tabela_frequencia_dupla(df, var_cat1, var_cat2):
-    freq = (
-        df.groupby([var_cat1, var_cat2], dropna=False)
+def tabela_frequencia_dupla(
+    df: pd.DataFrame,
+    var_cat1: str,
+    var_cat2: str
+) -> pd.DataFrame:
+    """Calcula frequências conjuntas de duas variáveis categóricas."""
+    frequencias = (
+        df.groupby(
+            [var_cat1, var_cat2],
+            dropna=False
+        )
         .size()
         .reset_index(name="frequencia")
     )
 
-    freq["percentual"] = 100 * freq["frequencia"] / freq["frequencia"].sum()
+    total = frequencias["frequencia"].sum()
+    frequencias["percentual"] = np.where(
+        total > 0,
+        100 * frequencias["frequencia"] / total,
+        0.0
+    )
 
-    return freq
+    return frequencias
 
 
-def tabela_frequencia_simples(df, variavel, incluir_ausentes=True):
-    """Calcula frequências absoluta e relativa de uma variável categórica."""
+def tabela_frequencia_simples(
+    df: pd.DataFrame,
+    variavel: str,
+    incluir_ausentes: bool = True
+) -> pd.DataFrame:
+    """Calcula frequências absoluta e relativa."""
     serie = df[variavel].copy()
 
     if incluir_ausentes:
-        serie = serie.astype("object").where(serie.notna(), "Ausente")
+        serie = (
+            serie.astype("object")
+            .where(serie.notna(), "Ausente")
+        )
     else:
         serie = serie.dropna()
 
@@ -106,1498 +222,1475 @@ def tabela_frequencia_simples(df, variavel, incluir_ausentes=True):
     )
 
     total = tabela["frequencia_absoluta"].sum()
-    tabela["frequencia_relativa_%"] = (
-        100 * tabela["frequencia_absoluta"] / total
-        if total > 0
-        else 0.0
+
+    tabela["frequencia_relativa_%"] = np.where(
+        total > 0,
+        100 * tabela["frequencia_absoluta"] / total,
+        0.0
     )
 
     return tabela
 
 
-def padronizar_fontes_plotly(fig):
-    """Padroniza as fontes de todas as figuras Plotly do aplicativo.
-
-    - Títulos das figuras: 18
-    - Títulos dos eixos x e y: 20
-    - Valores/níveis apresentados nos eixos: 20
-    - Itens e títulos das legendas: 20
-    - Títulos dos painéis (facetas): 20
-    """
-    fig.update_layout(
-        font=dict(size=20),
-        title_font=dict(size=18),
-        legend=dict(
-            font=dict(size=20),
-            title_font=dict(size=20)
-        )
-    )
-
-    fig.update_xaxes(
-        title_font=dict(size=20),
-        tickfont=dict(size=20)
-    )
-
-    fig.update_yaxes(
-        title_font=dict(size=20),
-        tickfont=dict(size=20)
-    )
-
-    # Nos gráficos com painéis, as anotações representam os níveis do fator.
-    fig.update_annotations(font=dict(size=20))
-
-    return fig
-
-
-def analise_descritiva_numericas(df, numericas):
+def analise_descritiva_numericas(
+    df: pd.DataFrame,
+    numericas: list[str]
+) -> pd.DataFrame:
+    """Cria uma tabela descritiva para as variáveis numéricas."""
     resumo = df[numericas].describe().T
     resumo["mediana"] = df[numericas].median()
     resumo["variancia"] = df[numericas].var()
     resumo["desvio_padrao"] = df[numericas].std()
-    resumo["coef_variacao_%"] = (resumo["desvio_padrao"] / resumo["mean"]) * 100
+
+    resumo["coef_variacao_%"] = np.where(
+        resumo["mean"].ne(0),
+        100 * resumo["desvio_padrao"] / resumo["mean"],
+        np.nan
+    )
+
     resumo["valores_ausentes"] = df[numericas].isna().sum()
-    resumo["percentual_ausentes_%"] = df[numericas].isna().mean() * 100
-    resumo = resumo.reset_index().rename(columns={"index": "variavel"})
-    return resumo
+    resumo["percentual_ausentes_%"] = (
+        100 * df[numericas].isna().mean()
+    )
+
+    return (
+        resumo
+        .reset_index()
+        .rename(columns={"index": "variavel"})
+    )
 
 
-def analise_descritiva_categoricas(df, categoricas):
-    lista = []
+def analise_descritiva_categoricas(
+    df: pd.DataFrame,
+    categoricas: list[str]
+) -> pd.DataFrame:
+    """Cria uma tabela descritiva para as variáveis categóricas."""
+    resultados = []
 
-    for col in categoricas:
-        serie = df[col]
+    for coluna in categoricas:
+        serie = df[coluna]
 
         total = len(serie)
-        ausentes = serie.isna().sum()
+        ausentes = int(serie.isna().sum())
         validos = total - ausentes
-        categorias_unicas = serie.nunique(dropna=True)
+        categorias_unicas = int(serie.nunique(dropna=True))
 
         moda = serie.mode(dropna=True)
-        moda_valor = moda.iloc[0] if len(moda) > 0 else np.nan
+        moda_valor = moda.iloc[0] if not moda.empty else np.nan
 
-        freq_moda = serie.value_counts(dropna=True).iloc[0] if validos > 0 else 0
-        perc_moda = (freq_moda / validos) * 100 if validos > 0 else 0
+        if validos > 0:
+            frequencias = serie.value_counts(dropna=True)
+            frequencia_moda = int(frequencias.iloc[0])
+            percentual_moda = 100 * frequencia_moda / validos
+        else:
+            frequencia_moda = 0
+            percentual_moda = 0.0
 
-        lista.append({
-            "variavel": col,
+        resultados.append({
+            "variavel": coluna,
             "total_observacoes": total,
             "valores_validos": validos,
             "valores_ausentes": ausentes,
-            "percentual_ausentes_%": (ausentes / total) * 100 if total > 0 else 0,
+            "percentual_ausentes_%": (
+                100 * ausentes / total if total > 0 else 0.0
+            ),
             "categorias_unicas": categorias_unicas,
             "categoria_mais_frequente": moda_valor,
-            "frequencia_categoria_mais_frequente": freq_moda,
-            "percentual_categoria_mais_frequente_%": perc_moda
+            "frequencia_categoria_mais_frequente": frequencia_moda,
+            "percentual_categoria_mais_frequente_%": percentual_moda
         })
 
-    return pd.DataFrame(lista)
+    return pd.DataFrame(resultados)
 
 
-# ---------------------------------------------------
-# Upload
-# ---------------------------------------------------
-arquivo = st.file_uploader("Envie o arquivo XLSX", type=["xlsx"])
+# ------------------------------------------------------------
+# Formatação dos gráficos Plotly
+# ------------------------------------------------------------
+def padronizar_fontes_plotly(fig):
+    """
+    Padroniza:
+    - título da figura: 18;
+    - títulos dos eixos: 20;
+    - níveis e valores dos eixos: 20;
+    - legendas: 20;
+    - títulos dos painéis: 20.
+    """
+    fig.update_layout(
+        font=dict(size=FONTE_NIVEIS),
+        title_font=dict(size=FONTE_TITULO_FIGURA),
+        legend=dict(
+            font=dict(size=FONTE_LEGENDA),
+            title_font=dict(size=FONTE_LEGENDA)
+        ),
+        hoverlabel=dict(font_size=FONTE_NIVEIS)
+    )
 
-if arquivo is not None:
+    fig.update_xaxes(
+        title_font=dict(size=FONTE_EIXOS),
+        tickfont=dict(size=FONTE_NIVEIS),
+        automargin=True
+    )
 
-    try:
-        xls = pd.ExcelFile(arquivo)
-        abas_planilha = xls.sheet_names
+    fig.update_yaxes(
+        title_font=dict(size=FONTE_EIXOS),
+        tickfont=dict(size=FONTE_NIVEIS),
+        automargin=True
+    )
 
-        aba_planilha = st.selectbox(
-            "Selecione a aba da planilha",
-            abas_planilha,
-            index=0
+    fig.update_annotations(
+        font=dict(size=FONTE_NIVEIS)
+    )
+
+    return fig
+
+
+# ------------------------------------------------------------
+# ANÁLISE 1 — HISTOGRAMA POR UM NÍVEL
+# ------------------------------------------------------------
+def exibir_histograma(
+    df: pd.DataFrame,
+    numericas: list[str],
+    categoricas: list[str]
+) -> None:
+    st.header("Histograma por nível de variável categórica")
+
+    if not numericas or not categoricas:
+        st.error(
+            "Esta análise exige pelo menos uma variável numérica "
+            "e uma variável categórica."
+        )
+        return
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        var_cat = st.selectbox(
+            "Escolha a variável categórica",
+            categoricas,
+            key="hist_var_cat"
         )
 
-        df = carregar_excel(arquivo, sheet_name=aba_planilha)
+    niveis = (
+        df[var_cat]
+        .dropna()
+        .astype(str)
+        .sort_values()
+        .unique()
+        .tolist()
+    )
+
+    if not niveis:
+        st.warning("A variável categórica selecionada não possui níveis válidos.")
+        return
+
+    with col2:
+        nivel = st.selectbox(
+            "Escolha o nível da categoria",
+            niveis,
+            key="hist_nivel"
+        )
+
+    with col3:
+        var_num = st.selectbox(
+            "Escolha a variável numérica",
+            numericas,
+            key="hist_var_num"
+        )
+
+    nbins = st.slider(
+        "Número de classes do histograma",
+        min_value=5,
+        max_value=80,
+        value=20,
+        key="hist_nbins"
+    )
+
+    dados = df[[var_cat, var_num]].copy()
+    dados = dados.dropna(subset=[var_cat, var_num])
+    dados[var_cat] = dados[var_cat].astype(str)
+    dados = dados[dados[var_cat] == nivel]
+
+    if dados.empty:
+        st.error("Não há observações para a seleção realizada.")
+        return
+
+    st.write(f"Categoria selecionada: **{var_cat}**")
+    st.write(f"Nível selecionado: **{nivel}**")
+    st.write(f"Variável numérica: **{var_num}**")
+    st.write(f"Número de observações: **{len(dados)}**")
+
+    fig = px.histogram(
+        dados,
+        x=var_num,
+        nbins=nbins,
+        histnorm=None,
+        title=f"Histograma de {var_num}: {var_cat} = {nivel}"
+    )
+
+    fig.update_traces(
+        marker_color="red",
+        marker_line_color="black",
+        marker_line_width=1,
+        hovertemplate=(
+            "Centro da classe: %{x}<br>"
+            "Frequência absoluta: %{y}<extra></extra>"
+        )
+    )
+
+    fig.update_layout(
+        template="plotly_white",
+        height=650,
+        xaxis_title=var_num,
+        yaxis_title="Frequência absoluta",
+        margin=dict(t=90, r=40, b=90, l=90)
+    )
+
+    fig = padronizar_fontes_plotly(fig)
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        key="hist_grafico"
+    )
+
+    st.subheader("Resumo estatístico")
+    tabela_resumo = resumo_variavel(dados, var_num)
+
+    st.dataframe(
+        tabela_resumo,
+        use_container_width=True
+    )
+
+    csv = tabela_resumo.to_csv(
+        index=False,
+        decimal=",",
+        sep=";"
+    ).encode("utf-8-sig")
+
+    st.download_button(
+        "Baixar resumo do histograma em CSV",
+        data=csv,
+        file_name="resumo_histograma.csv",
+        mime="text/csv",
+        key="hist_download"
+    )
+
+
+# ------------------------------------------------------------
+# ANÁLISE 2 — CONTINGÊNCIA COM DUAS VARIÁVEIS
+# ------------------------------------------------------------
+def exibir_contingencia_dupla(
+    df: pd.DataFrame,
+    categoricas: list[str]
+) -> None:
+    st.header("Tabela de contingência entre duas variáveis categóricas")
+
+    if len(categoricas) < 2:
+        st.error(
+            "Esta análise exige pelo menos duas variáveis categóricas."
+        )
+        return
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        var_cat1 = st.selectbox(
+            "Escolha a primeira variável categórica",
+            categoricas,
+            key="cont2_var1"
+        )
+
+    opcoes_var2 = [
+        coluna for coluna in categoricas
+        if coluna != var_cat1
+    ]
+
+    with col2:
+        var_cat2 = st.selectbox(
+            "Escolha a segunda variável categórica",
+            opcoes_var2,
+            key="cont2_var2"
+        )
+
+    incluir_ausentes = st.checkbox(
+        "Incluir valores ausentes como categoria 'Ausente'",
+        value=False,
+        key="cont2_ausentes"
+    )
+
+    dados = df[[var_cat1, var_cat2]].copy()
+
+    if incluir_ausentes:
+        for coluna in [var_cat1, var_cat2]:
+            dados[coluna] = (
+                dados[coluna]
+                .astype("object")
+                .where(dados[coluna].notna(), "Ausente")
+            )
+    else:
+        dados = dados.dropna(subset=[var_cat1, var_cat2])
+
+    if dados.empty:
+        st.error("Não há dados disponíveis para as variáveis selecionadas.")
+        return
+
+    dados[var_cat1] = dados[var_cat1].astype(str)
+    dados[var_cat2] = dados[var_cat2].astype(str)
+
+    tabela_contingencia = pd.crosstab(
+        dados[var_cat1],
+        dados[var_cat2],
+        margins=True,
+        margins_name="Total"
+    )
+
+    st.subheader("Tabela de contingência")
+    st.dataframe(
+        tabela_contingencia,
+        use_container_width=True
+    )
+
+    tabela_grafico = tabela_frequencia_dupla(
+        dados,
+        var_cat1,
+        var_cat2
+    )
+
+    st.subheader("Gráfico de barras")
+
+    tipo_barra = st.radio(
+        "Tipo de gráfico",
+        ["Barras agrupadas", "Barras empilhadas"],
+        horizontal=True,
+        key="cont2_tipo"
+    )
+
+    barmode = (
+        "group"
+        if tipo_barra == "Barras agrupadas"
+        else "stack"
+    )
+
+    fig = px.bar(
+        tabela_grafico,
+        x=var_cat1,
+        y="frequencia",
+        color=var_cat2,
+        text="frequencia",
+        barmode=barmode,
+        title=f"Frequência conjunta de {var_cat1} e {var_cat2}",
+        labels={"frequencia": "Frequência absoluta"}
+    )
+
+    fig.update_traces(
+        texttemplate="%{text:.0f}",
+        textposition="outside",
+        textfont=dict(size=FONTE_ROTULOS_BARRAS),
+        cliponaxis=False,
+        marker_line_color="black",
+        marker_line_width=0.8
+    )
+
+    fig.update_layout(
+        template="plotly_white",
+        height=650,
+        xaxis_title=var_cat1,
+        yaxis_title="Frequência absoluta",
+        margin=dict(t=100, r=50, b=110, l=90)
+    )
+
+    fig.update_yaxes(
+        rangemode="tozero"
+    )
+
+    fig = padronizar_fontes_plotly(fig)
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        key="cont2_grafico"
+    )
+
+    csv = tabela_contingencia.to_csv(
+        decimal=",",
+        sep=";"
+    ).encode("utf-8-sig")
+
+    st.download_button(
+        "Baixar tabela de contingência em CSV",
+        data=csv,
+        file_name="tabela_contingencia.csv",
+        mime="text/csv",
+        key="cont2_download"
+    )
+
+
+# ------------------------------------------------------------
+# ANÁLISE 3 — ANÁLISE DESCRITIVA
+# ------------------------------------------------------------
+def exibir_analise_descritiva(
+    df: pd.DataFrame,
+    numericas: list[str],
+    categoricas: list[str]
+) -> None:
+    st.header("Análise descritiva das variáveis")
+
+    st.subheader("Resumo geral do banco de dados")
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Número de linhas", df.shape[0])
+    col2.metric("Número de colunas", df.shape[1])
+    col3.metric("Variáveis numéricas", len(numericas))
+    col4.metric("Variáveis categóricas", len(categoricas))
+
+    st.divider()
+    st.subheader("Variáveis numéricas")
+
+    if not numericas:
+        st.warning("Não há variáveis numéricas para descrever.")
+    else:
+        resumo_num = analise_descritiva_numericas(
+            df,
+            numericas
+        )
+
+        st.dataframe(
+            resumo_num,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        csv_num = resumo_num.to_csv(
+            index=False,
+            decimal=",",
+            sep=";"
+        ).encode("utf-8-sig")
+
+        st.download_button(
+            "Baixar análise numérica em CSV",
+            data=csv_num,
+            file_name="analise_descritiva_numericas.csv",
+            mime="text/csv",
+            key="desc_download_num"
+        )
+
+    st.divider()
+    st.subheader("Variáveis categóricas")
+
+    if not categoricas:
+        st.warning("Não há variáveis categóricas para descrever.")
+        return
+
+    resumo_cat = analise_descritiva_categoricas(
+        df,
+        categoricas
+    )
+
+    st.dataframe(
+        resumo_cat,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    csv_cat = resumo_cat.to_csv(
+        index=False,
+        decimal=",",
+        sep=";"
+    ).encode("utf-8-sig")
+
+    st.download_button(
+        "Baixar análise categórica em CSV",
+        data=csv_cat,
+        file_name="analise_descritiva_categoricas.csv",
+        mime="text/csv",
+        key="desc_download_cat"
+    )
+
+    st.subheader("Tabela e gráfico de frequência")
+
+    var_cat = st.selectbox(
+        "Escolha uma variável categórica",
+        categoricas,
+        key="desc_var_cat"
+    )
+
+    tabela = tabela_frequencia_simples(
+        df,
+        var_cat,
+        incluir_ausentes=True
+    )
+
+    st.dataframe(
+        tabela.rename(columns={
+            "categoria": var_cat,
+            "frequencia_absoluta": "Frequência absoluta",
+            "frequencia_relativa_%": "Frequência relativa (%)"
+        }).style.format({
+            "Frequência relativa (%)": "{:.2f}%"
+        }),
+        use_container_width=True,
+        hide_index=True
+    )
+
+    ordem = tabela["categoria"].tolist()
+
+    fig = px.bar(
+        tabela,
+        x="categoria",
+        y="frequencia_absoluta",
+        text="frequencia_absoluta",
+        category_orders={"categoria": ordem},
+        labels={
+            "categoria": var_cat,
+            "frequencia_absoluta": "Frequência absoluta"
+        },
+        title=f"Frequências das categorias de {var_cat}"
+    )
+
+    fig.update_traces(
+        texttemplate="%{text:.0f}",
+        textposition="outside",
+        textfont=dict(size=FONTE_ROTULOS_BARRAS),
+        cliponaxis=False,
+        marker_line_color="black",
+        marker_line_width=0.8
+    )
+
+    fig.update_layout(
+        template="plotly_white",
+        height=650,
+        xaxis_title=var_cat,
+        yaxis_title="Frequência absoluta",
+        margin=dict(t=100, r=50, b=120, l=90)
+    )
+
+    fig.update_yaxes(
+        rangemode="tozero",
+        range=[
+            0,
+            max(
+                float(tabela["frequencia_absoluta"].max()) * 1.20,
+                1
+            )
+        ]
+    )
+
+    fig = padronizar_fontes_plotly(fig)
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        key="desc_grafico"
+    )
+
+
+# ------------------------------------------------------------
+# ANÁLISE 4 — FREQUÊNCIAS CATEGÓRICAS
+# ------------------------------------------------------------
+def exibir_frequencias_categoricas(
+    df: pd.DataFrame,
+    categoricas: list[str]
+) -> None:
+    st.header("Frequências de uma variável categórica")
+
+    if not categoricas:
+        st.warning("Não há variáveis categóricas disponíveis.")
+        return
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        var_cat = st.selectbox(
+            "Escolha a variável categórica",
+            categoricas,
+            key="freq_var_cat"
+        )
+
+    with col2:
+        ordenacao = st.selectbox(
+            "Ordenar as categorias por",
+            [
+                "Frequência decrescente",
+                "Frequência crescente",
+                "Ordem alfabética"
+            ],
+            key="freq_ordenacao"
+        )
+
+    incluir_ausentes = st.checkbox(
+        "Incluir valores ausentes como categoria 'Ausente'",
+        value=True,
+        key="freq_ausentes"
+    )
+
+    tabela = tabela_frequencia_simples(
+        df,
+        var_cat,
+        incluir_ausentes
+    )
+
+    if ordenacao == "Frequência crescente":
+        tabela = tabela.sort_values(
+            "frequencia_absoluta",
+            ascending=True
+        )
+    elif ordenacao == "Ordem alfabética":
+        tabela = tabela.sort_values(
+            "categoria",
+            key=lambda serie: serie.str.lower()
+        )
+    else:
+        tabela = tabela.sort_values(
+            "frequencia_absoluta",
+            ascending=False
+        )
+
+    tabela = tabela.reset_index(drop=True)
+
+    if tabela.empty:
+        st.error("Não há observações para a variável selecionada.")
+        return
+
+    total = int(tabela["frequencia_absoluta"].sum())
+    st.write(f"Total de observações consideradas: **{total}**")
+
+    ordem = tabela["categoria"].tolist()
+    altura = max(550, 50 * len(ordem) + 180)
+
+    fig_abs = px.bar(
+        tabela,
+        x="frequencia_absoluta",
+        y="categoria",
+        text="frequencia_absoluta",
+        orientation="h",
+        category_orders={"categoria": ordem},
+        labels={
+            "categoria": var_cat,
+            "frequencia_absoluta": "Frequência absoluta"
+        },
+        title="Frequências absolutas"
+    )
+
+    fig_abs.update_traces(
+        texttemplate="%{text:.0f}",
+        textposition="outside",
+        textfont=dict(size=FONTE_ROTULOS_BARRAS),
+        cliponaxis=False,
+        marker_line_color="black",
+        marker_line_width=1,
+        hovertemplate=(
+            f"{var_cat}: %{{y}}<br>"
+            "Frequência absoluta: %{x:.0f}<extra></extra>"
+        )
+    )
+
+    fig_abs.update_layout(
+        template="plotly_white",
+        height=altura,
+        margin=dict(t=90, r=110, b=90, l=140),
+        xaxis_title="Frequência absoluta",
+        yaxis_title=var_cat
+    )
+
+    fig_abs.update_xaxes(
+        rangemode="tozero",
+        range=[
+            0,
+            max(
+                float(tabela["frequencia_absoluta"].max()) * 1.25,
+                1
+            )
+        ]
+    )
+
+    fig_abs.update_yaxes(
+        categoryorder="array",
+        categoryarray=ordem,
+        autorange="reversed"
+    )
+
+    fig_rel = px.bar(
+        tabela,
+        x="frequencia_relativa_%",
+        y="categoria",
+        text="frequencia_relativa_%",
+        orientation="h",
+        category_orders={"categoria": ordem},
+        labels={
+            "categoria": var_cat,
+            "frequencia_relativa_%": "Frequência relativa (%)"
+        },
+        title="Frequências relativas"
+    )
+
+    fig_rel.update_traces(
+        texttemplate="%{text:.2f}%",
+        textposition="outside",
+        textfont=dict(size=FONTE_ROTULOS_BARRAS),
+        cliponaxis=False,
+        marker_line_color="black",
+        marker_line_width=1,
+        hovertemplate=(
+            f"{var_cat}: %{{y}}<br>"
+            "Frequência relativa: %{x:.2f}%<extra></extra>"
+        )
+    )
+
+    fig_rel.update_layout(
+        template="plotly_white",
+        height=altura,
+        margin=dict(t=90, r=110, b=90, l=140),
+        xaxis_title="Frequência relativa (%)",
+        yaxis_title=var_cat
+    )
+
+    fig_rel.update_xaxes(
+        ticksuffix="%",
+        rangemode="tozero",
+        range=[
+            0,
+            max(
+                float(tabela["frequencia_relativa_%"].max()) * 1.25,
+                1
+            )
+        ]
+    )
+
+    fig_rel.update_yaxes(
+        categoryorder="array",
+        categoryarray=ordem,
+        autorange="reversed"
+    )
+
+    fig_abs = padronizar_fontes_plotly(fig_abs)
+    fig_rel = padronizar_fontes_plotly(fig_rel)
+
+    col_abs, col_rel = st.columns(2)
+
+    with col_abs:
+        st.plotly_chart(
+            fig_abs,
+            use_container_width=True,
+            key="freq_grafico_abs"
+        )
+
+    with col_rel:
+        st.plotly_chart(
+            fig_rel,
+            use_container_width=True,
+            key="freq_grafico_rel"
+        )
+
+    st.subheader("Tabela de frequências")
+
+    tabela_exibicao = tabela.rename(columns={
+        "categoria": var_cat,
+        "frequencia_absoluta": "Frequência absoluta",
+        "frequencia_relativa_%": "Frequência relativa (%)"
+    })
+
+    st.dataframe(
+        tabela_exibicao.style.format({
+            "Frequência relativa (%)": "{:.2f}%"
+        }),
+        use_container_width=True,
+        hide_index=True
+    )
+
+    csv = tabela_exibicao.to_csv(
+        index=False,
+        decimal=",",
+        sep=";"
+    ).encode("utf-8-sig")
+
+    st.download_button(
+        "Baixar tabela de frequências em CSV",
+        data=csv,
+        file_name=f"frequencias_{var_cat}.csv",
+        mime="text/csv",
+        key="freq_download"
+    )
+
+
+# ------------------------------------------------------------
+# ANÁLISE 5 — HISTOGRAMAS POR NÍVEL
+# ------------------------------------------------------------
+def exibir_histogramas_por_nivel(
+    df: pd.DataFrame,
+    numericas: list[str],
+    categoricas: list[str]
+) -> None:
+    st.header("Histogramas da variável numérica por nível do fator")
+
+    st.markdown(
+        "Todos os painéis utilizam os mesmos limites e os mesmos "
+        "intervalos de classe. A altura de cada barra representa a "
+        "frequência absoluta dentro daquele intervalo."
+    )
+
+    if not numericas or not categoricas:
+        st.error(
+            "Esta análise exige pelo menos uma variável numérica "
+            "e uma variável categórica."
+        )
+        return
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        var_num = st.selectbox(
+            "Escolha a variável numérica",
+            numericas,
+            key="multi_var_num"
+        )
+
+    with col2:
+        var_cat = st.selectbox(
+            "Escolha a variável categórica",
+            categoricas,
+            key="multi_var_cat"
+        )
+
+    col_bins, col_paineis, col_ordem = st.columns(3)
+
+    with col_bins:
+        nbins = st.slider(
+            "Número de classes",
+            min_value=3,
+            max_value=30,
+            value=8,
+            key="multi_nbins"
+        )
+
+    with col_paineis:
+        paineis_por_linha = st.slider(
+            "Painéis por linha",
+            min_value=1,
+            max_value=4,
+            value=3,
+            key="multi_paineis"
+        )
+
+    with col_ordem:
+        ordenacao = st.selectbox(
+            "Ordenar os níveis por",
+            [
+                "Ordem alfabética",
+                "Frequência decrescente",
+                "Frequência crescente"
+            ],
+            key="multi_ordenacao"
+        )
+
+    incluir_ausentes = st.checkbox(
+        "Incluir valores ausentes da variável categórica "
+        "como nível 'Ausente'",
+        value=False,
+        key="multi_ausentes"
+    )
+
+    dados = df[[var_num, var_cat]].copy()
+    dados = dados.dropna(subset=[var_num])
+
+    if incluir_ausentes:
+        dados[var_cat] = (
+            dados[var_cat]
+            .astype("object")
+            .where(dados[var_cat].notna(), "Ausente")
+        )
+    else:
+        dados = dados.dropna(subset=[var_cat])
+
+    dados[var_cat] = dados[var_cat].astype(str)
+
+    contagens = dados[var_cat].value_counts()
+
+    if ordenacao == "Frequência decrescente":
+        niveis_ordenados = contagens.index.tolist()
+    elif ordenacao == "Frequência crescente":
+        niveis_ordenados = (
+            contagens
+            .sort_values(ascending=True)
+            .index
+            .tolist()
+        )
+    else:
+        niveis_ordenados = sorted(
+            contagens.index.tolist(),
+            key=str.lower
+        )
+
+    niveis_selecionados = st.multiselect(
+        "Níveis que serão exibidos",
+        options=niveis_ordenados,
+        default=niveis_ordenados,
+        key="multi_niveis"
+    )
+
+    if not niveis_selecionados:
+        st.warning("Selecione pelo menos um nível.")
+        return
+
+    dados = dados[
+        dados[var_cat].isin(niveis_selecionados)
+    ].copy()
+
+    if dados.empty:
+        st.warning("Não há observações para a seleção realizada.")
+        return
+
+    niveis_exibidos = [
+        nivel for nivel in niveis_ordenados
+        if nivel in niveis_selecionados
+    ]
+
+    dados[var_cat] = pd.Categorical(
+        dados[var_cat],
+        categories=niveis_exibidos,
+        ordered=True
+    )
+
+    minimo = float(dados[var_num].min())
+    maximo = float(dados[var_num].max())
+
+    if minimo == maximo:
+        amplitude = max(abs(minimo) * 0.10, 1.0)
+        inicio_classes = minimo - amplitude / 2
+        fim_classes = maximo + amplitude / 2
+        largura_classe = amplitude
+    else:
+        inicio_classes = minimo
+        fim_classes = maximo
+        largura_classe = (maximo - minimo) / nbins
+
+    numero_linhas = int(
+        np.ceil(len(niveis_exibidos) / paineis_por_linha)
+    )
+    altura = max(550, 380 * numero_linhas)
+
+    fig = px.histogram(
+        dados,
+        x=var_num,
+        facet_col=var_cat,
+        facet_col_wrap=paineis_por_linha,
+        histnorm=None,
+        category_orders={var_cat: niveis_exibidos},
+        labels={
+            var_num: var_num,
+            var_cat: var_cat
+        },
+        title=f"Distribuição de {var_num} por níveis de {var_cat}"
+    )
+
+    fig.update_traces(
+        xbins=dict(
+            start=inicio_classes,
+            end=fim_classes,
+            size=largura_classe
+        ),
+        marker_line_color="black",
+        marker_line_width=0.8,
+        opacity=0.85,
+        hovertemplate=(
+            "Centro da classe: %{x}<br>"
+            "Frequência absoluta: %{y}<extra></extra>"
+        )
+    )
+
+    contagens_paineis = (
+        dados[var_cat]
+        .value_counts()
+        .to_dict()
+    )
+
+    def atualizar_titulo_painel(anotacao) -> None:
+        nivel = anotacao.text.split("=")[-1]
+        n = int(contagens_paineis.get(nivel, 0))
+        anotacao.update(text=f"{nivel} (n = {n})")
+
+    fig.for_each_annotation(atualizar_titulo_painel)
+
+    fig.update_xaxes(
+        range=[inicio_classes, fim_classes],
+        showgrid=True,
+        gridcolor="rgba(0, 0, 0, 0.10)"
+    )
+
+    # Todos os painéis usam a mesma escala vertical.
+    fig.update_yaxes(
+        matches="y",
+        title_text="Frequência absoluta",
+        rangemode="tozero",
+        showgrid=True,
+        gridcolor="rgba(0, 0, 0, 0.10)"
+    )
+
+    fig.update_layout(
+        template="plotly_white",
+        height=altura,
+        showlegend=False,
+        bargap=0.05,
+        margin=dict(t=110, r=40, b=100, l=90)
+    )
+
+    fig = padronizar_fontes_plotly(fig)
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        key="multi_grafico"
+    )
+
+    st.caption(
+        "O valor n apresentado em cada painel é o total de observações "
+        "do nível. A soma das barras de cada painel corresponde a esse n."
+    )
+
+    st.subheader("Resumo da variável numérica por nível")
+
+    resumo = (
+        dados
+        .groupby(
+            var_cat,
+            observed=True
+        )[var_num]
+        .agg(
+            numero_observacoes="count",
+            media="mean",
+            mediana="median",
+            desvio_padrao="std",
+            minimo="min",
+            maximo="max"
+        )
+        .reindex(niveis_exibidos)
+        .reset_index()
+    )
+
+    st.dataframe(
+        resumo.style.format({
+            "media": "{:.3f}",
+            "mediana": "{:.3f}",
+            "desvio_padrao": "{:.3f}",
+            "minimo": "{:.3f}",
+            "maximo": "{:.3f}"
+        }),
+        use_container_width=True,
+        hide_index=True
+    )
+
+    csv = resumo.to_csv(
+        index=False,
+        decimal=",",
+        sep=";"
+    ).encode("utf-8-sig")
+
+    st.download_button(
+        "Baixar resumo dos histogramas em CSV",
+        data=csv,
+        file_name=f"resumo_{var_num}_por_{var_cat}.csv",
+        mime="text/csv",
+        key="multi_download"
+    )
+
+
+# ------------------------------------------------------------
+# ANÁLISE 6 — CONTINGÊNCIA COM TRÊS FATORES
+# ------------------------------------------------------------
+def exibir_contingencia_tres_fatores(
+    df: pd.DataFrame,
+    categoricas: list[str]
+) -> None:
+    st.header(
+        "Gráfico de barras e tabela de contingência com três fatores"
+    )
+
+    if len(categoricas) < 3:
+        st.error(
+            "Esta análise exige pelo menos três variáveis categóricas."
+        )
+        return
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        var1 = st.selectbox(
+            "Primeira variável categórica (eixo x)",
+            categoricas,
+            key="cont3_var1"
+        )
+
+    opcoes_var2 = [
+        coluna for coluna in categoricas
+        if coluna != var1
+    ]
+
+    with col2:
+        var2 = st.selectbox(
+            "Segunda variável categórica (grupos)",
+            opcoes_var2,
+            key="cont3_var2"
+        )
+
+    opcoes_var3 = [
+        coluna for coluna in categoricas
+        if coluna not in [var1, var2]
+    ]
+
+    with col3:
+        var3 = st.selectbox(
+            "Terceira variável categórica (painéis)",
+            opcoes_var3,
+            key="cont3_var3"
+        )
+
+    incluir_ausentes = st.checkbox(
+        "Incluir valores ausentes como nível 'Ausente'",
+        value=False,
+        key="cont3_ausentes"
+    )
+
+    dados = df[[var1, var2, var3]].copy()
+
+    if incluir_ausentes:
+        for coluna in [var1, var2, var3]:
+            dados[coluna] = (
+                dados[coluna]
+                .astype("object")
+                .where(dados[coluna].notna(), "Ausente")
+            )
+    else:
+        dados = dados.dropna(subset=[var1, var2, var3])
+
+    for coluna in [var1, var2, var3]:
+        dados[coluna] = dados[coluna].astype(str)
+
+    if dados.empty:
+        st.warning("Não há observações para as variáveis selecionadas.")
+        return
+
+    niveis1 = sorted(dados[var1].unique().tolist(), key=str.lower)
+    niveis2 = sorted(dados[var2].unique().tolist(), key=str.lower)
+    niveis3 = sorted(dados[var3].unique().tolist(), key=str.lower)
+
+    col_n1, col_n2, col_n3 = st.columns(3)
+
+    with col_n1:
+        nivel1 = st.selectbox(
+            f"Nível de {var1}",
+            ["Todos os níveis"] + niveis1,
+            key="cont3_nivel1"
+        )
+
+    with col_n2:
+        nivel2 = st.selectbox(
+            f"Nível de {var2}",
+            ["Todos os níveis"] + niveis2,
+            key="cont3_nivel2"
+        )
+
+    with col_n3:
+        nivel3 = st.selectbox(
+            f"Nível de {var3}",
+            ["Todos os níveis"] + niveis3,
+            key="cont3_nivel3"
+        )
+
+    filtros = {
+        var1: nivel1,
+        var2: nivel2,
+        var3: nivel3
+    }
+
+    dados_filtrados = dados.copy()
+
+    for coluna, nivel in filtros.items():
+        if nivel != "Todos os níveis":
+            dados_filtrados = dados_filtrados[
+                dados_filtrados[coluna] == nivel
+            ]
+
+    if dados_filtrados.empty:
+        st.warning(
+            "Não existem observações para a combinação selecionada."
+        )
+        return
+
+    tabela = (
+        dados_filtrados
+        .groupby(
+            [var1, var2, var3],
+            dropna=False
+        )
+        .size()
+        .reset_index(name="Frequência")
+    )
+
+    total = int(tabela["Frequência"].sum())
+    tabela["Frequência relativa (%)"] = (
+        100 * tabela["Frequência"] / total
+    )
+
+    ordem_x = [
+        nivel for nivel in niveis1
+        if nivel in tabela[var1].unique()
+    ]
+    ordem_cor = [
+        nivel for nivel in niveis2
+        if nivel in tabela[var2].unique()
+    ]
+    ordem_painel = [
+        nivel for nivel in niveis3
+        if nivel in tabela[var3].unique()
+    ]
+
+    st.write(
+        f"Número total de observações consideradas: **{total}**"
+    )
+
+    tipo = st.radio(
+        "Organização das barras",
+        ["Barras agrupadas", "Barras empilhadas"],
+        horizontal=True,
+        key="cont3_tipo"
+    )
+
+    barmode = "group" if tipo == "Barras agrupadas" else "stack"
+
+    paineis_por_linha = min(max(len(ordem_painel), 1), 3)
+    numero_linhas = int(
+        np.ceil(len(ordem_painel) / paineis_por_linha)
+    )
+    altura = max(600, 430 * numero_linhas)
+
+    fig = px.bar(
+        tabela,
+        x=var1,
+        y="Frequência",
+        color=var2,
+        facet_col=var3,
+        facet_col_wrap=paineis_por_linha,
+        text="Frequência",
+        barmode=barmode,
+        category_orders={
+            var1: ordem_x,
+            var2: ordem_cor,
+            var3: ordem_painel
+        },
+        labels={"Frequência": "Frequência absoluta"},
+        title=f"Frequências de {var1} e {var2}, por {var3}"
+    )
+
+    fig.update_traces(
+        texttemplate="%{text:.0f}",
+        textposition="outside",
+        textfont=dict(size=FONTE_ROTULOS_BARRAS),
+        cliponaxis=False,
+        marker_line_color="black",
+        marker_line_width=0.8
+    )
+
+    fig.for_each_annotation(
+        lambda anotacao: anotacao.update(
+            text=anotacao.text.split("=")[-1]
+        )
+    )
+
+    fig.update_xaxes(
+        categoryorder="array",
+        categoryarray=ordem_x
+    )
+
+    fig.update_yaxes(
+        title_text="Frequência absoluta",
+        rangemode="tozero"
+    )
+
+    fig.update_layout(
+        template="plotly_white",
+        height=altura,
+        margin=dict(t=140, r=50, b=120, l=100),
+        legend=dict(
+            title_text=var2,
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="left",
+            x=0
+        )
+    )
+
+    fig = padronizar_fontes_plotly(fig)
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        key="cont3_grafico"
+    )
+
+    st.subheader("Tabela de contingência com três variáveis")
+
+    st.dataframe(
+        tabela.style.format({
+            "Frequência": "{:.0f}",
+            "Frequência relativa (%)": "{:.2f}%"
+        }),
+        use_container_width=True,
+        hide_index=True
+    )
+
+    st.subheader("Tabelas cruzadas por painel")
+
+    for nivel_painel in ordem_painel:
+        dados_painel = dados_filtrados[
+            dados_filtrados[var3] == nivel_painel
+        ]
+
+        tabela_cruzada = pd.crosstab(
+            dados_painel[var1],
+            dados_painel[var2],
+            margins=True,
+            margins_name="Total"
+        )
+
+        with st.expander(
+            f"{var3} = {nivel_painel}",
+            expanded=(len(ordem_painel) == 1)
+        ):
+            st.dataframe(
+                tabela_cruzada,
+                use_container_width=True
+            )
+
+    csv = tabela.to_csv(
+        index=False,
+        decimal=",",
+        sep=";"
+    ).encode("utf-8-sig")
+
+    st.download_button(
+        "Baixar tabela de contingência com três fatores em CSV",
+        data=csv,
+        file_name="tabela_contingencia_3_fatores.csv",
+        mime="text/csv",
+        key="cont3_download"
+    )
+
+
+# ------------------------------------------------------------
+# Upload e navegação
+# ------------------------------------------------------------
+arquivo = st.file_uploader(
+    "Envie o arquivo XLSX",
+    type=["xlsx"]
+)
+
+if arquivo is None:
+    st.info("Envie um arquivo .xlsx para começar.")
+    st.stop()
+
+try:
+    conteudo_arquivo = arquivo.getvalue()
+
+    abas_planilha = listar_abas_excel(conteudo_arquivo)
+
+    aba_planilha = st.selectbox(
+        "Selecione a aba da planilha",
+        abas_planilha,
+        index=0,
+        key="planilha_selecionada"
+    )
+
+    with st.spinner("Lendo e preparando os dados..."):
+        df = carregar_excel(
+            conteudo_arquivo,
+            aba_planilha
+        )
         df = preparar_dados(df)
 
-        st.subheader("Pré-visualização dos dados")
-        st.dataframe(df.head(20), use_container_width=True)
+    numericas, categoricas = classificar_variaveis(df)
 
-        numericas, categoricas = classificar_variaveis(df)
+    with st.expander("Pré-visualização dos dados", expanded=False):
+        st.dataframe(
+            df.head(20),
+            use_container_width=True
+        )
 
-        if len(numericas) == 0:
-            st.warning("Não foram encontradas variáveis numéricas.")
+    st.sidebar.header("Navegação")
 
-        if len(categoricas) == 0:
-            st.warning("Não foram encontradas variáveis categóricas.")
-
-        aba1, aba2, aba3, aba4, aba5, aba6 = st.tabs([
+    analise_selecionada = st.sidebar.radio(
+        "Selecione a análise",
+        [
             "Histograma",
             "Tabela de contingência",
-            "Análise Descritiva",
+            "Análise descritiva",
             "Frequências categóricas",
             "Histogramas por nível",
             "Contingência com 3 fatores"
-        ])
-
-        # ===================================================
-        # ABA 1 — HISTOGRAMA
-        # ===================================================
-        with aba1:
-
-            st.header("Histograma por nível de variável categórica")
-
-            if len(numericas) == 0 or len(categoricas) == 0:
-                st.error(
-                    "Para gerar o histograma, é necessário ter pelo menos "
-                    "uma variável numérica e uma variável categórica."
-                )
-
-            else:
-                col1, col2, col3 = st.columns(3)
-
-                with col1:
-                    var_cat_hist = st.selectbox(
-                        "Escolha a variável categórica",
-                        categoricas,
-                        key="var_cat_hist"
-                    )
-
-                niveis = (
-                    df[var_cat_hist]
-                    .dropna()
-                    .astype(str)
-                    .sort_values()
-                    .unique()
-                    .tolist()
-                )
-
-                with col2:
-                    nivel_escolhido = st.selectbox(
-                        "Escolha o nível da categoria",
-                        niveis,
-                        key="nivel_hist"
-                    )
-
-                with col3:
-                    var_num_hist = st.selectbox(
-                        "Escolha a variável contínua",
-                        numericas,
-                        key="var_num_hist"
-                    )
-
-                nbins = st.slider(
-                    "Número de classes do histograma",
-                    min_value=5,
-                    max_value=80,
-                    value=20,
-                    key="nbins_hist"
-                )
-
-                remover_na_hist = st.checkbox(
-                    "Remover valores ausentes",
-                    value=True,
-                    key="remover_na_hist"
-                )
-
-                dados_hist = df.copy()
-                dados_hist[var_cat_hist] = dados_hist[var_cat_hist].astype(str)
-
-                dados_hist = dados_hist[
-                    dados_hist[var_cat_hist] == nivel_escolhido
-                ]
-
-                if remover_na_hist:
-                    dados_hist = dados_hist.dropna(
-                        subset=[var_cat_hist, var_num_hist]
-                    )
-
-                if dados_hist.empty:
-                    st.error("Não há dados disponíveis para o nível selecionado.")
-
-                else:
-                    st.write(f"Categoria selecionada: **{var_cat_hist}**")
-                    st.write(f"Nível selecionado: **{nivel_escolhido}**")
-                    st.write(f"Variável contínua: **{var_num_hist}**")
-                    st.write(f"Número de observações: **{len(dados_hist)}**")
-
-                    fig_hist = px.histogram(
-                        dados_hist,
-                        x=var_num_hist,
-                        nbins=nbins,
-                        title=f"Histograma de {var_num_hist} para {var_cat_hist} = {nivel_escolhido}"
-                    )
-
-                    fig_hist.update_traces(
-                        marker_color="red",
-                        marker_line_color="black",
-                        marker_line_width=1
-                    )
-
-                    fig_hist.update_layout(
-                        template="plotly_white",
-                        height=600,
-                        xaxis_title=var_num_hist,
-                        yaxis_title="Frequência",
-                        xaxis=dict(
-                            title_font=dict(size=22),
-                            tickfont=dict(size=16)
-                        ),
-                        yaxis=dict(
-                            title_font=dict(size=22),
-                            tickfont=dict(size=16)
-                        ),
-                        title_font=dict(size=22)
-                    )
-
-                    fig_hist = padronizar_fontes_plotly(fig_hist)
-
-                    st.plotly_chart(fig_hist, use_container_width=True)
-
-                    st.subheader("Resumo estatístico")
-
-                    tabela_resumo = resumo_variavel(dados_hist, var_num_hist)
-
-                    st.dataframe(tabela_resumo, use_container_width=True)
-
-                    csv_hist = tabela_resumo.to_csv(index=False).encode("utf-8")
-
-                    st.download_button(
-                        label="Baixar resumo do histograma em CSV",
-                        data=csv_hist,
-                        file_name="resumo_histograma.csv",
-                        mime="text/csv"
-                    )
-
-        # ===================================================
-        # ABA 2 — TABELA DE CONTINGÊNCIA
-        # ===================================================
-        with aba2:
-
-            st.header("Tabela de contingência entre duas variáveis categóricas")
-
-            if len(categoricas) < 2:
-                st.error(
-                    "Para gerar a tabela de contingência, são necessárias "
-                    "pelo menos duas variáveis categóricas."
-                )
-
-            else:
-                col1, col2 = st.columns(2)
-
-                with col1:
-                    var_cat1 = st.selectbox(
-                        "Escolha a primeira variável categórica",
-                        categoricas,
-                        key="var_cat1_cont"
-                    )
-
-                opcoes_cat2 = [c for c in categoricas if c != var_cat1]
-
-                with col2:
-                    var_cat2 = st.selectbox(
-                        "Escolha a segunda variável categórica",
-                        opcoes_cat2,
-                        key="var_cat2_cont"
-                    )
-
-                remover_na_cont = st.checkbox(
-                    "Remover valores ausentes",
-                    value=True,
-                    key="remover_na_cont"
-                )
-
-                dados_cont = df.copy()
-
-                if remover_na_cont:
-                    dados_cont = dados_cont.dropna(
-                        subset=[var_cat1, var_cat2]
-                    )
-
-                if dados_cont.empty:
-                    st.error("Não há dados disponíveis para as variáveis selecionadas.")
-
-                else:
-                    dados_cont[var_cat1] = dados_cont[var_cat1].astype(str)
-                    dados_cont[var_cat2] = dados_cont[var_cat2].astype(str)
-
-                    tabela_contingencia = pd.crosstab(
-                        dados_cont[var_cat1],
-                        dados_cont[var_cat2],
-                        margins=True,
-                        margins_name="Total"
-                    )
-
-                    st.subheader("Tabela de contingência")
-
-                    st.dataframe(
-                        tabela_contingencia,
-                        use_container_width=True
-                    )
-
-                    tabela_grafico = tabela_frequencia_dupla(
-                        dados_cont,
-                        var_cat1,
-                        var_cat2
-                    )
-
-                    st.subheader("Gráfico de barras")
-
-                    tipo_barra = st.radio(
-                        "Tipo de gráfico de barras",
-                        [
-                            "Barras agrupadas",
-                            "Barras empilhadas"
-                        ],
-                        horizontal=True
-                    )
-
-                    barmode = "group" if tipo_barra == "Barras agrupadas" else "stack"
-
-                    fig_bar = px.bar(
-                        tabela_grafico,
-                        x=var_cat1,
-                        y="frequencia",
-                        color=var_cat2,
-                        text="frequencia",
-                        barmode=barmode,
-                        title=f"Frequência conjunta de {var_cat1} e {var_cat2}"
-                    )
-
-                    fig_bar.update_traces(
-                        texttemplate="%{text:.0f}",
-                        textposition="outside",
-                        textfont=dict(size=20),#cambio 14/07/2026 (original era size=14)
-                        cliponaxis=False
-                    )
-                    
-                    fig_bar.update_layout(
-                        template="plotly_white",
-                        height=600,
-                        xaxis_title=var_cat1,
-                        yaxis_title="Frequência",
-                        xaxis=dict(
-                            title_font=dict(size=22),
-                            tickfont=dict(size=16)
-                        ),
-                        yaxis=dict(
-                            title_font=dict(size=22),
-                            tickfont=dict(size=16)
-                        ),
-                        title_font=dict(size=22),
-                        legend=dict(
-                            font=dict(size=16),
-                            title_font=dict(size=16)
-                        )
-                    )
-
-                    fig_bar = padronizar_fontes_plotly(fig_bar)
-
-                    st.plotly_chart(fig_bar, use_container_width=True)
-
-                    csv_cont = tabela_contingencia.to_csv().encode("utf-8")
-
-                    st.download_button(
-                        label="Baixar tabela de contingência em CSV",
-                        data=csv_cont,
-                        file_name="tabela_contingencia.csv",
-                        mime="text/csv"
-                    )
-
-        # ===================================================
-        # ABA 3 — ANÁLISE DESCRITIVA
-        # ===================================================
-        with aba3:
-
-            st.header("Análise descritiva das variáveis")
-
-            st.subheader("Resumo geral do banco de dados")
-
-            col1, col2, col3, col4 = st.columns(4)
-
-            col1.metric("Número de linhas", df.shape[0])
-            col2.metric("Número de colunas", df.shape[1])
-            col3.metric("Variáveis numéricas", len(numericas))
-            col4.metric("Variáveis categóricas", len(categoricas))
-
-            st.divider()
-
-            st.subheader("Análise descritiva das variáveis numéricas")
-
-            if len(numericas) == 0:
-                st.warning("Não há variáveis numéricas para descrever.")
-            else:
-                resumo_num = analise_descritiva_numericas(df, numericas)
-
-                st.dataframe(
-                    resumo_num,
-                    use_container_width=True
-                )
-
-                csv_num = resumo_num.to_csv(index=False).encode("utf-8")
-
-                st.download_button(
-                    label="Baixar análise descritiva das variáveis numéricas em CSV",
-                    data=csv_num,
-                    file_name="analise_descritiva_numericas.csv",
-                    mime="text/csv"
-                )
-
-            st.divider()
-
-            st.subheader("Análise descritiva das variáveis categóricas")
-
-            if len(categoricas) == 0:
-                st.warning("Não há variáveis categóricas para descrever.")
-            else:
-                resumo_cat = analise_descritiva_categoricas(df, categoricas)
-
-                st.dataframe(
-                    resumo_cat,
-                    use_container_width=True
-                )
-
-                csv_cat = resumo_cat.to_csv(index=False).encode("utf-8")
-
-                st.download_button(
-                    label="Baixar análise descritiva das variáveis categóricas em CSV",
-                    data=csv_cat,
-                    file_name="analise_descritiva_categoricas.csv",
-                    mime="text/csv"
-                )
-
-                st.subheader("Tabela de frequência por variável categórica")
-
-                var_cat_desc = st.selectbox(
-                    "Escolha uma variável categórica para ver a frequência",
-                    categoricas,
-                    key="var_cat_desc"
-                )
-
-                tabela_freq = (
-                    df[var_cat_desc]
-                    .astype("object")
-                    .fillna("Ausente")
-                    .value_counts()
-                    .reset_index()
-                )
-
-                tabela_freq.columns = [var_cat_desc, "frequencia"]
-                tabela_freq["percentual_%"] = (
-                    tabela_freq["frequencia"] / tabela_freq["frequencia"].sum()
-                ) * 100
-
-                st.dataframe(
-                    tabela_freq,
-                    use_container_width=True
-                )
-
-                fig_freq = px.bar(
-                    tabela_freq,
-                    x=var_cat_desc,
-                    y="frequencia",
-                    text="frequencia",
-                    title=f"Frequência das categorias de {var_cat_desc}"
-                )
-
-                fig_freq.update_layout(
-                    template="plotly_white",
-                    height=600,
-                    xaxis_title=var_cat_desc,
-                    yaxis_title="Frequência",
-                    xaxis=dict(
-                        title_font=dict(size=22),
-                        tickfont=dict(size=16)
-                    ),
-                    yaxis=dict(
-                        title_font=dict(size=22),
-                        tickfont=dict(size=16)
-                    ),
-                    title_font=dict(size=22)
-                )
-
-                fig_freq = padronizar_fontes_plotly(fig_freq)
-
-                st.plotly_chart(fig_freq, use_container_width=True)
-
-
-        # ===================================================
-        # ABA 4 — FREQUÊNCIAS ABSOLUTAS E RELATIVAS
-        # ===================================================
-        with aba4:
-
-            st.header("Frequências de uma variável categórica")
-
-            if len(categoricas) == 0:
-                st.warning(
-                    "Não há variáveis categóricas disponíveis para esta análise."
-                )
-
-            else:
-                col_selecao, col_ordenacao = st.columns(2)
-
-                with col_selecao:
-                    var_cat_freq = st.selectbox(
-                        "Escolha a variável categórica",
-                        categoricas,
-                        key="var_cat_freq_aba4"
-                    )
-
-                with col_ordenacao:
-                    ordem_freq = st.selectbox(
-                        "Ordenar as categorias por",
-                        [
-                            "Frequência decrescente",
-                            "Frequência crescente",
-                            "Ordem alfabética"
-                        ],
-                        key="ordem_freq_aba4"
-                    )
-
-                incluir_ausentes_freq = st.checkbox(
-                    "Incluir valores ausentes como categoria 'Ausente'",
-                    value=True,
-                    key="incluir_ausentes_freq_aba4"
-                )
-
-                tabela_freq_simples = tabela_frequencia_simples(
-                    df=df,
-                    variavel=var_cat_freq,
-                    incluir_ausentes=incluir_ausentes_freq
-                )
-
-                if ordem_freq == "Frequência crescente":
-                    tabela_freq_simples = tabela_freq_simples.sort_values(
-                        "frequencia_absoluta",
-                        ascending=True
-                    )
-                elif ordem_freq == "Ordem alfabética":
-                    tabela_freq_simples = tabela_freq_simples.sort_values(
-                        "categoria",
-                        ascending=True,
-                        key=lambda s: s.str.lower()
-                    )
-                else:
-                    tabela_freq_simples = tabela_freq_simples.sort_values(
-                        "frequencia_absoluta",
-                        ascending=False
-                    )
-
-                tabela_freq_simples = tabela_freq_simples.reset_index(drop=True)
-
-                if tabela_freq_simples.empty:
-                    st.error(
-                        "Não há observações disponíveis para a variável selecionada."
-                    )
-
-                else:
-                    total_observacoes_freq = int(
-                        tabela_freq_simples["frequencia_absoluta"].sum()
-                    )
-
-                    st.write(
-                        f"Total de observações consideradas: "
-                        f"**{total_observacoes_freq}**"
-                    )
-
-                    ordem_categorias = tabela_freq_simples["categoria"].tolist()
-
-                    # ---------------------------------------------------
-                    # Gráfico horizontal de frequências absolutas
-                    # ---------------------------------------------------
-                    fig_abs = px.bar(
-                        tabela_freq_simples,
-                        x="frequencia_absoluta",
-                        y="categoria",
-                        text="frequencia_absoluta",
-                        orientation="h",
-                        category_orders={"categoria": ordem_categorias},
-                        labels={
-                            "categoria": var_cat_freq,
-                            "frequencia_absoluta": "Frequência absoluta"
-                        },
-                        title="Frequências absolutas"
-                    )
-
-                    fig_abs.update_traces(
-                        texttemplate="%{text:.0f}",
-                        textposition="outside",
-                        textfont=dict(size=20),
-                        cliponaxis=False,
-                        marker_line_color="black",
-                        marker_line_width=1,
-                        hovertemplate=(
-                            f"{var_cat_freq}: %{{y}}<br>"
-                            "Frequência absoluta: %{x:.0f}"
-                            "<extra></extra>"
-                        )
-                    )
-
-                    fig_abs.update_layout(
-                        template="plotly_white",
-                        height=max(550, 45 * len(ordem_categorias) + 180),
-                        margin=dict(t=80, r=90, b=70, l=120),
-                        uniformtext_minsize=12,
-                        uniformtext_mode="show",
-                        font=dict(size=14),
-                        title_font=dict(size=14),
-                        xaxis=dict(
-                            title="Frequência absoluta",
-                            title_font=dict(size=14),
-                            tickfont=dict(size=12),
-                            rangemode="tozero",
-                            automargin=True
-                        ),
-                        yaxis=dict(
-                            title=var_cat_freq,
-                            title_font=dict(size=14),
-                            tickfont=dict(size=12),
-                            categoryorder="array",
-                            categoryarray=ordem_categorias,
-                            autorange="reversed",
-                            automargin=True
-                        ),
-                        hoverlabel=dict(font_size=14)
-                    )
-
-                    fig_abs.update_xaxes(
-                        range=[
-                            0,
-                            max(
-                                tabela_freq_simples[
-                                    "frequencia_absoluta"
-                                ].max() * 1.20,
-                                1
-                            )
-                        ]
-                    )
-
-                    # ---------------------------------------------------
-                    # Gráfico horizontal de frequências relativas
-                    # ---------------------------------------------------
-                    fig_rel = px.bar(
-                        tabela_freq_simples,
-                        x="frequencia_relativa_%",
-                        y="categoria",
-                        text="frequencia_relativa_%",
-                        orientation="h",
-                        category_orders={"categoria": ordem_categorias},
-                        labels={
-                            "categoria": var_cat_freq,
-                            "frequencia_relativa_%": "Frequência relativa (%)"
-                        },
-                        title="Frequências relativas"
-                    )
-
-                    fig_rel.update_traces(
-                        texttemplate="%{text:.2f}%",
-                        textposition="outside",
-                        textfont=dict(size=20),
-                        cliponaxis=False,
-                        marker_line_color="black",
-                        marker_line_width=1,
-                        hovertemplate=(
-                            f"{var_cat_freq}: %{{y}}<br>"
-                            "Frequência relativa: %{x:.2f}%"
-                            "<extra></extra>"
-                        )
-                    )
-
-                    fig_rel.update_layout(
-                        template="plotly_white",
-                        height=max(550, 45 * len(ordem_categorias) + 180),
-                        margin=dict(t=80, r=90, b=70, l=120),
-                        uniformtext_minsize=12,
-                        uniformtext_mode="show",
-                        font=dict(size=14),
-                        title_font=dict(size=14),
-                        xaxis=dict(
-                            title="Frequência relativa (%)",
-                            title_font=dict(size=14),
-                            tickfont=dict(size=12),
-                            ticksuffix="%",
-                            rangemode="tozero",
-                            automargin=True
-                        ),
-                        yaxis=dict(
-                            title=var_cat_freq,
-                            title_font=dict(size=14),
-                            tickfont=dict(size=12),
-                            categoryorder="array",
-                            categoryarray=ordem_categorias,
-                            autorange="reversed",
-                            automargin=True
-                        ),
-                        hoverlabel=dict(font_size=14)
-                    )
-
-                    fig_rel.update_xaxes(
-                        range=[
-                            0,
-                            max(
-                                tabela_freq_simples[
-                                    "frequencia_relativa_%"
-                                ].max() * 1.20,
-                                1
-                            )
-                        ]
-                    )
-
-                    fig_abs = padronizar_fontes_plotly(fig_abs)
-                    fig_rel = padronizar_fontes_plotly(fig_rel)
-
-                    col_graf_abs, col_graf_rel = st.columns(2)
-
-                    with col_graf_abs:
-                        st.plotly_chart(
-                            fig_abs,
-                            use_container_width=True,
-                            key="grafico_freq_absoluta_aba4"
-                        )
-
-                    with col_graf_rel:
-                        st.plotly_chart(
-                            fig_rel,
-                            use_container_width=True,
-                            key="grafico_freq_relativa_aba4"
-                        )
-
-                    st.subheader("Tabela de frequências")
-
-                    tabela_exibicao = tabela_freq_simples.rename(
-                        columns={
-                            "categoria": var_cat_freq,
-                            "frequencia_absoluta": "Frequência absoluta",
-                            "frequencia_relativa_%": "Frequência relativa (%)"
-                        }
-                    )
-
-                    st.dataframe(
-                        tabela_exibicao.style.format(
-                            {"Frequência relativa (%)": "{:.2f}%"}
-                        ),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-
-                    csv_freq = tabela_exibicao.to_csv(
-                        index=False,
-                        decimal=",",
-                        sep=";"
-                    ).encode("utf-8-sig")
-
-                    st.download_button(
-                        label="Baixar tabela de frequências em CSV",
-                        data=csv_freq,
-                        file_name=f"frequencias_{var_cat_freq}.csv",
-                        mime="text/csv",
-                        key="download_freq_aba4"
-                    )
-
-
-
-        # ===================================================
-        # ABA 5 — HISTOGRAMAS PARA TODOS OS NÍVEIS DO FATOR
-        # ===================================================
-        with aba5:
-
-            st.header("Histogramas da variável numérica por nível do fator")
-
-            st.markdown(
-                "Selecione uma variável numérica e uma variável categórica. "
-                "Cada nível da variável categórica será apresentado em um "
-                "painel separado, utilizando as mesmas classes e a mesma "
-                "escala no eixo horizontal."
-            )
-
-            if len(numericas) == 0 or len(categoricas) == 0:
-                st.error(
-                    "Esta análise exige pelo menos uma variável numérica e "
-                    "uma variável categórica."
-                )
-
-            else:
-                col_var_num, col_var_cat = st.columns(2)
-
-                with col_var_num:
-                    var_num_multihist = st.selectbox(
-                        "Escolha a variável numérica",
-                        numericas,
-                        key="var_num_multihist_aba5"
-                    )
-
-                with col_var_cat:
-                    var_cat_multihist = st.selectbox(
-                        "Escolha a variável categórica",
-                        categoricas,
-                        key="var_cat_multihist_aba5"
-                    )
-
-                col_bins, col_colunas, col_ordem = st.columns(3)
-
-                with col_bins:
-                    nbins_multihist = st.slider(
-                        "Número de classes",
-                        min_value=5,
-                        max_value=20,
-                        value=10,
-                        key="nbins_multihist_aba5"
-                    )
-
-                with col_colunas:
-                    numero_colunas_multihist = st.slider(
-                        "Painéis por linha",
-                        min_value=1,
-                        max_value=4,
-                        value=3,
-                        key="numero_colunas_multihist_aba5"
-                    )
-
-                with col_ordem:
-                    ordem_niveis_multihist = st.selectbox(
-                        "Ordenar os níveis por",
-                        [
-                            "Ordem alfabética",
-                            "Frequência decrescente",
-                            "Frequência crescente"
-                        ],
-                        key="ordem_niveis_multihist_aba5"
-                    )
-
-                incluir_ausentes_multihist = st.checkbox(
-                    "Incluir valores ausentes da variável categórica como "
-                    "nível 'Ausente'",
-                    value=False,
-                    key="incluir_ausentes_multihist_aba5"
-                )
-
-                dados_multihist = df[
-                    [var_num_multihist, var_cat_multihist]
-                ].copy()
-
-                # Valores ausentes na variável numérica não podem compor o
-                # histograma e, portanto, são sempre removidos.
-                dados_multihist = dados_multihist.dropna(
-                    subset=[var_num_multihist]
-                )
-
-                if incluir_ausentes_multihist:
-                    dados_multihist[var_cat_multihist] = (
-                        dados_multihist[var_cat_multihist]
-                        .astype("object")
-                        .where(
-                            dados_multihist[var_cat_multihist].notna(),
-                            "Ausente"
-                        )
-                    )
-                else:
-                    dados_multihist = dados_multihist.dropna(
-                        subset=[var_cat_multihist]
-                    )
-
-                dados_multihist[var_cat_multihist] = (
-                    dados_multihist[var_cat_multihist].astype(str)
-                )
-
-                contagem_niveis = (
-                    dados_multihist[var_cat_multihist]
-                    .value_counts()
-                )
-
-                if ordem_niveis_multihist == "Frequência decrescente":
-                    niveis_ordenados = contagem_niveis.index.tolist()
-                elif ordem_niveis_multihist == "Frequência crescente":
-                    niveis_ordenados = (
-                        contagem_niveis
-                        .sort_values(ascending=True)
-                        .index
-                        .tolist()
-                    )
-                else:
-                    niveis_ordenados = sorted(
-                        contagem_niveis.index.tolist(),
-                        key=lambda valor: valor.lower()
-                    )
-
-                niveis_selecionados = st.multiselect(
-                    "Níveis que serão exibidos",
-                    options=niveis_ordenados,
-                    default=niveis_ordenados,
-                    key="niveis_multihist_aba5"
-                )
-
-                dados_multihist = dados_multihist[
-                    dados_multihist[var_cat_multihist].isin(
-                        niveis_selecionados
-                    )
-                ].copy()
-
-                if dados_multihist.empty or len(niveis_selecionados) == 0:
-                    st.warning(
-                        "Não há observações disponíveis para a combinação "
-                        "selecionada. Escolha ao menos um nível do fator."
-                    )
-
-                else:
-                    # Mantém a ordem escolhida pelo usuário nos painéis.
-                    niveis_exibidos = [
-                        nivel for nivel in niveis_ordenados
-                        if nivel in niveis_selecionados
-                    ]
-
-                    dados_multihist[var_cat_multihist] = pd.Categorical(
-                        dados_multihist[var_cat_multihist],
-                        categories=niveis_exibidos,
-                        ordered=True
-                    )
-
-                    minimo_global = float(
-                        dados_multihist[var_num_multihist].min()
-                    )
-                    maximo_global = float(
-                        dados_multihist[var_num_multihist].max()
-                    )
-
-                    if minimo_global == maximo_global:
-                        amplitude_auxiliar = max(
-                            abs(minimo_global) * 0.10,
-                            1.0
-                        )
-                        inicio_classes = minimo_global - amplitude_auxiliar / 2
-                        fim_classes = maximo_global + amplitude_auxiliar / 2
-                        largura_classe = amplitude_auxiliar
-                    else:
-                        inicio_classes = minimo_global
-                        fim_classes = maximo_global
-                        largura_classe = (
-                            maximo_global - minimo_global
-                        ) / nbins_multihist
-
-                    numero_niveis = len(niveis_exibidos)
-                    numero_linhas = int(
-                        np.ceil(numero_niveis / numero_colunas_multihist)
-                    )
-                    altura_figura = max(500, 330 * numero_linhas)
-
-                    fig_multihist = px.histogram(
-                        dados_multihist,
-                        x=var_num_multihist,
-                        color=var_cat_multihist,
-                        facet_col=var_cat_multihist,
-                        facet_col_wrap=numero_colunas_multihist,
-                        category_orders={
-                            var_cat_multihist: niveis_exibidos
-                        },
-                        labels={
-                            var_num_multihist: var_num_multihist,
-                            var_cat_multihist: var_cat_multihist
-                        },
-                        title=(
-                            f"Distribuição de {var_num_multihist} por níveis "
-                            f"de {var_cat_multihist}"
-                        )
-                    )
-
-                    # As mesmas classes são aplicadas a todos os painéis,
-                    # permitindo comparar diretamente as distribuições.
-                    fig_multihist.update_traces(
-                        xbins=dict(
-                            start=inicio_classes,
-                            end=fim_classes,
-                            size=largura_classe
-                        ),
-                        marker_line_color="black",
-                        marker_line_width=0.8,
-                        opacity=0.85,
-                        hovertemplate=(
-                            "Centro da classe: %{x}<br>"
-                            "Frequência: %{y}<extra></extra>"
-                        )
-                    )
-
-                    # Remove o nome da variável antes do título de cada painel,
-                    # deixando somente o nível correspondente.
-                    fig_multihist.for_each_annotation(
-                        lambda anotacao: anotacao.update(
-                            text=anotacao.text.split("=")[-1]
-                        )
-                    )
-
-                    fig_multihist.update_annotations(
-                        font=dict(size=14)
-                    )
-
-                    fig_multihist.update_xaxes(
-                        range=[inicio_classes, fim_classes],
-                        title_font=dict(size=14),
-                        tickfont=dict(size=12),
-                        showgrid=True,
-                        gridcolor="rgba(0, 0, 0, 0.10)",
-                        automargin=True
-                    )
-
-                    fig_multihist.update_yaxes(
-                        title_text="Frequência",
-                        title_font=dict(size=14),
-                        tickfont=dict(size=12),
-                        rangemode="tozero",
-                        showgrid=True,
-                        gridcolor="rgba(0, 0, 0, 0.10)",
-                        automargin=True
-                    )
-
-                    fig_multihist.update_layout(
-                        template="plotly_white",
-                        height=altura_figura,
-                        showlegend=False,
-                        bargap=0.05,
-                        font=dict(size=12),
-                        title_font=dict(size=14),
-                        hoverlabel=dict(font_size=12),
-                        margin=dict(t=90, r=30, b=70, l=70)
-                    )
-
-                    fig_multihist = padronizar_fontes_plotly(
-                        fig_multihist
-                    )
-
-                    st.plotly_chart(
-                        fig_multihist,
-                        use_container_width=True,
-                        key="grafico_multihist_aba5"
-                    )
-
-                    st.caption(
-                        "Todos os painéis utilizam os mesmos limites e as "
-                        "mesmas classes no eixo horizontal. A altura das "
-                        "barras representa a frequência absoluta em cada "
-                        "intervalo."
-                    )
-
-                    st.subheader("Resumo da variável numérica por nível")
-
-                    resumo_multihist = (
-                        dados_multihist
-                        .groupby(
-                            var_cat_multihist,
-                            observed=True
-                        )[var_num_multihist]
-                        .agg(
-                            numero_observacoes="count",
-                            media="mean",
-                            mediana="median",
-                            desvio_padrao="std",
-                            minimo="min",
-                            maximo="max"
-                        )
-                        .reindex(niveis_exibidos)
-                        .reset_index()
-                    )
-
-                    st.dataframe(
-                        resumo_multihist.style.format({
-                            "media": "{:.3f}",
-                            "mediana": "{:.3f}",
-                            "desvio_padrao": "{:.3f}",
-                            "minimo": "{:.3f}",
-                            "maximo": "{:.3f}"
-                        }),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-
-                    csv_multihist = resumo_multihist.to_csv(
-                        index=False,
-                        decimal=",",
-                        sep=";"
-                    ).encode("utf-8-sig")
-
-                    st.download_button(
-                        label="Baixar resumo dos histogramas em CSV",
-                        data=csv_multihist,
-                        file_name=(
-                            f"resumo_{var_num_multihist}_por_"
-                            f"{var_cat_multihist}.csv"
-                        ),
-                        mime="text/csv",
-                        key="download_resumo_multihist_aba5"
-                    )
-
-
-
-        # ===================================================
-        # ABA 6 — CONTINGÊNCIA COM TRÊS VARIÁVEIS CATEGÓRICAS
-        # ===================================================
-        with aba6:
-
-            st.header(
-                "Gráfico de barras e tabela de contingência com três fatores"
-            )
-
-            st.markdown(
-                "Selecione três variáveis categóricas diferentes. A primeira "
-                "será apresentada no eixo horizontal, a segunda definirá os "
-                "grupos de barras e a terceira organizará os resultados em "
-                "painéis. Também é possível filtrar um nível específico de "
-                "cada fator."
-            )
-
-            if len(categoricas) < 3:
-                st.error(
-                    "Esta análise exige pelo menos três variáveis categóricas."
-                )
-
-            else:
-                col_var1, col_var2, col_var3 = st.columns(3)
-
-                with col_var1:
-                    var_cat_3f_1 = st.selectbox(
-                        "Primeira variável categórica (eixo x)",
-                        categoricas,
-                        key="var_cat_3f_1_aba6"
-                    )
-
-                opcoes_var2_3f = [
-                    variavel for variavel in categoricas
-                    if variavel != var_cat_3f_1
-                ]
-
-                with col_var2:
-                    var_cat_3f_2 = st.selectbox(
-                        "Segunda variável categórica (grupos de barras)",
-                        opcoes_var2_3f,
-                        key="var_cat_3f_2_aba6"
-                    )
-
-                opcoes_var3_3f = [
-                    variavel for variavel in categoricas
-                    if variavel not in [var_cat_3f_1, var_cat_3f_2]
-                ]
-
-                with col_var3:
-                    var_cat_3f_3 = st.selectbox(
-                        "Terceira variável categórica (painéis)",
-                        opcoes_var3_3f,
-                        key="var_cat_3f_3_aba6"
-                    )
-
-                dados_3f = df[
-                    [var_cat_3f_1, var_cat_3f_2, var_cat_3f_3]
-                ].copy()
-
-                incluir_ausentes_3f = st.checkbox(
-                    "Incluir valores ausentes como nível 'Ausente'",
-                    value=False,
-                    key="incluir_ausentes_3f_aba6"
-                )
-
-                if incluir_ausentes_3f:
-                    for variavel in [
-                        var_cat_3f_1,
-                        var_cat_3f_2,
-                        var_cat_3f_3
-                    ]:
-                        dados_3f[variavel] = (
-                            dados_3f[variavel]
-                            .astype("object")
-                            .where(dados_3f[variavel].notna(), "Ausente")
-                        )
-                else:
-                    dados_3f = dados_3f.dropna(
-                        subset=[
-                            var_cat_3f_1,
-                            var_cat_3f_2,
-                            var_cat_3f_3
-                        ]
-                    )
-
-                for variavel in [
-                    var_cat_3f_1,
-                    var_cat_3f_2,
-                    var_cat_3f_3
-                ]:
-                    dados_3f[variavel] = dados_3f[variavel].astype(str)
-
-                if dados_3f.empty:
-                    st.warning(
-                        "Não há observações disponíveis para as variáveis "
-                        "selecionadas."
-                    )
-
-                else:
-                    niveis_3f_1 = sorted(
-                        dados_3f[var_cat_3f_1].unique().tolist(),
-                        key=lambda valor: valor.lower()
-                    )
-                    niveis_3f_2 = sorted(
-                        dados_3f[var_cat_3f_2].unique().tolist(),
-                        key=lambda valor: valor.lower()
-                    )
-                    niveis_3f_3 = sorted(
-                        dados_3f[var_cat_3f_3].unique().tolist(),
-                        key=lambda valor: valor.lower()
-                    )
-
-                    col_nivel1, col_nivel2, col_nivel3 = st.columns(3)
-
-                    with col_nivel1:
-                        nivel_3f_1 = st.selectbox(
-                            f"Nível de {var_cat_3f_1}",
-                            ["Todos os níveis"] + niveis_3f_1,
-                            key="nivel_3f_1_aba6"
-                        )
-
-                    with col_nivel2:
-                        nivel_3f_2 = st.selectbox(
-                            f"Nível de {var_cat_3f_2}",
-                            ["Todos os níveis"] + niveis_3f_2,
-                            key="nivel_3f_2_aba6"
-                        )
-
-                    with col_nivel3:
-                        nivel_3f_3 = st.selectbox(
-                            f"Nível de {var_cat_3f_3}",
-                            ["Todos os níveis"] + niveis_3f_3,
-                            key="nivel_3f_3_aba6"
-                        )
-
-                    dados_3f_filtrados = dados_3f.copy()
-
-                    filtros_3f = {
-                        var_cat_3f_1: nivel_3f_1,
-                        var_cat_3f_2: nivel_3f_2,
-                        var_cat_3f_3: nivel_3f_3
-                    }
-
-                    for variavel, nivel in filtros_3f.items():
-                        if nivel != "Todos os níveis":
-                            dados_3f_filtrados = dados_3f_filtrados[
-                                dados_3f_filtrados[variavel] == nivel
-                            ]
-
-                    if dados_3f_filtrados.empty:
-                        st.warning(
-                            "Não existem observações para a combinação de "
-                            "níveis selecionada."
-                        )
-
-                    else:
-                        tabela_3f = (
-                            dados_3f_filtrados
-                            .groupby(
-                                [
-                                    var_cat_3f_1,
-                                    var_cat_3f_2,
-                                    var_cat_3f_3
-                                ],
-                                dropna=False
-                            )
-                            .size()
-                            .reset_index(name="Frequência")
-                        )
-
-                        total_3f = int(tabela_3f["Frequência"].sum())
-                        tabela_3f["Frequência relativa (%)"] = (
-                            100 * tabela_3f["Frequência"] / total_3f
-                        )
-
-                        ordem_x_3f = [
-                            nivel for nivel in niveis_3f_1
-                            if nivel in tabela_3f[var_cat_3f_1].unique()
-                        ]
-                        ordem_cor_3f = [
-                            nivel for nivel in niveis_3f_2
-                            if nivel in tabela_3f[var_cat_3f_2].unique()
-                        ]
-                        ordem_painel_3f = [
-                            nivel for nivel in niveis_3f_3
-                            if nivel in tabela_3f[var_cat_3f_3].unique()
-                        ]
-
-                        st.write(
-                            f"Número total de observações consideradas: "
-                            f"**{total_3f}**"
-                        )
-
-                        tipo_barra_3f = st.radio(
-                            "Organização das barras",
-                            ["Barras agrupadas", "Barras empilhadas"],
-                            horizontal=True,
-                            key="tipo_barra_3f_aba6"
-                        )
-
-                        barmode_3f = (
-                            "group"
-                            if tipo_barra_3f == "Barras agrupadas"
-                            else "stack"
-                        )
-
-                        numero_paineis_3f = len(ordem_painel_3f)
-                        paineis_por_linha_3f = min(
-                            max(numero_paineis_3f, 1),
-                            3
-                        )
-                        numero_linhas_3f = int(
-                            np.ceil(
-                                numero_paineis_3f / paineis_por_linha_3f
-                            )
-                        )
-                        altura_grafico_3f = max(
-                            550,
-                            390 * numero_linhas_3f
-                        )
-
-                        fig_3f = px.bar(
-                            tabela_3f,
-                            x=var_cat_3f_1,
-                            y="Frequência",
-                            color=var_cat_3f_2,
-                            facet_col=var_cat_3f_3,
-                            facet_col_wrap=paineis_por_linha_3f,
-                            text="Frequência",
-                            barmode=barmode_3f,
-                            category_orders={
-                                var_cat_3f_1: ordem_x_3f,
-                                var_cat_3f_2: ordem_cor_3f,
-                                var_cat_3f_3: ordem_painel_3f
-                            },
-                            labels={
-                                var_cat_3f_1: var_cat_3f_1,
-                                var_cat_3f_2: var_cat_3f_2,
-                                var_cat_3f_3: var_cat_3f_3,
-                                "Frequência": "Frequência absoluta"
-                            },
-                            title=(
-                                f"Frequências de {var_cat_3f_1} e "
-                                f"{var_cat_3f_2}, por {var_cat_3f_3}"
-                            )
-                        )
-
-                        fig_3f.update_traces(
-                            texttemplate="%{text:.0f}",
-                            textposition="outside",
-                            textfont=dict(size=20),#cambio 14/07/2026 (original era size=14)
-                            cliponaxis=False,
-                            marker_line_color="black",
-                            marker_line_width=0.8,
-                            hovertemplate=(
-                                f"{var_cat_3f_1}: %{{x}}<br>"
-                                f"{var_cat_3f_2}: %{{fullData.name}}<br>"
-                                "Frequência: %{y:.0f}<extra></extra>"
-                            )
-                        )
-
-                        fig_3f.for_each_annotation(
-                            lambda anotacao: anotacao.update(
-                                text=anotacao.text.split("=")[-1]
-                            )
-                        )
-
-                        fig_3f.update_annotations(
-                            font=dict(size=14)
-                        )
-
-                        fig_3f.update_xaxes(
-                            title_font=dict(size=14),
-                            tickfont=dict(size=14),
-                            automargin=True,
-                            categoryorder="array",
-                            categoryarray=ordem_x_3f
-                        )
-
-                        fig_3f.update_yaxes(
-                            title_text="Frequência absoluta",
-                            title_font=dict(size=14),
-                            tickfont=dict(size=14),
-                            rangemode="tozero",
-                            automargin=True
-                        )
-
-                        fig_3f.update_layout(
-                            template="plotly_white",
-                            height=altura_grafico_3f,
-                            font=dict(size=14),
-                            title_font=dict(size=14),
-                            legend=dict(
-                                title_text=var_cat_3f_2,
-                                font=dict(size=14),
-                                title_font=dict(size=14),
-                                orientation="h",
-                                yanchor="bottom",
-                                y=1.02,
-                                xanchor="left",
-                                x=0
-                            ),
-                            hoverlabel=dict(font_size=14),
-                            margin=dict(t=120, r=30, b=100, l=80),
-                            uniformtext_minsize=14,
-                            uniformtext_mode="show"
-                        )
-
-                        fig_3f = padronizar_fontes_plotly(fig_3f)
-
-                        st.plotly_chart(
-                            fig_3f,
-                            use_container_width=True,
-                            key="grafico_contingencia_3f_aba6"
-                        )
-
-                        st.subheader(
-                            "Tabela de contingência com três variáveis"
-                        )
-
-                        tabela_3f_exibicao = tabela_3f.copy()
-
-                        st.dataframe(
-                            tabela_3f_exibicao.style.format({
-                                "Frequência": "{:.0f}",
-                                "Frequência relativa (%)": "{:.2f}%"
-                            }),
-                            use_container_width=True,
-                            hide_index=True
-                        )
-
-                        st.subheader(
-                            "Tabelas cruzadas entre as duas primeiras "
-                            "variáveis"
-                        )
-
-                        for nivel_painel_3f in ordem_painel_3f:
-                            dados_nivel_painel_3f = (
-                                dados_3f_filtrados[
-                                    dados_3f_filtrados[var_cat_3f_3]
-                                    == nivel_painel_3f
-                                ]
-                            )
-
-                            tabela_cruzada_3f = pd.crosstab(
-                                dados_nivel_painel_3f[var_cat_3f_1],
-                                dados_nivel_painel_3f[var_cat_3f_2],
-                                margins=True,
-                                margins_name="Total"
-                            )
-
-                            with st.expander(
-                                f"{var_cat_3f_3} = {nivel_painel_3f}",
-                                expanded=(len(ordem_painel_3f) == 1)
-                            ):
-                                st.dataframe(
-                                    tabela_cruzada_3f,
-                                    use_container_width=True
-                                )
-
-                        csv_tabela_3f = tabela_3f_exibicao.to_csv(
-                            index=False,
-                            decimal=",",
-                            sep=";"
-                        ).encode("utf-8-sig")
-
-                        st.download_button(
-                            label=(
-                                "Baixar tabela de contingência com três "
-                                "fatores em CSV"
-                            ),
-                            data=csv_tabela_3f,
-                            file_name="tabela_contingencia_3_fatores.csv",
-                            mime="text/csv",
-                            key="download_tabela_3f_aba6"
-                        )
-
-    except Exception as e:
-        st.error(f"Erro ao ler ou processar o arquivo: {e}")
-
-else:
-    st.info("Envie um arquivo .xlsx para começar.")
+        ],
+        key="analise_selecionada"
+    )
+
+    st.sidebar.divider()
+    st.sidebar.metric("Linhas", df.shape[0])
+    st.sidebar.metric("Colunas", df.shape[1])
+    st.sidebar.metric("Variáveis numéricas", len(numericas))
+    st.sidebar.metric("Variáveis categóricas", len(categoricas))
+
+    if st.sidebar.button(
+        "Limpar cache dos dados",
+        key="limpar_cache"
+    ):
+        st.cache_data.clear()
+        st.rerun()
+
+    # Apenas uma função de análise é executada por vez.
+    if analise_selecionada == "Histograma":
+        exibir_histograma(
+            df,
+            numericas,
+            categoricas
+        )
+
+    elif analise_selecionada == "Tabela de contingência":
+        exibir_contingencia_dupla(
+            df,
+            categoricas
+        )
+
+    elif analise_selecionada == "Análise descritiva":
+        exibir_analise_descritiva(
+            df,
+            numericas,
+            categoricas
+        )
+
+    elif analise_selecionada == "Frequências categóricas":
+        exibir_frequencias_categoricas(
+            df,
+            categoricas
+        )
+
+    elif analise_selecionada == "Histogramas por nível":
+        exibir_histogramas_por_nivel(
+            df,
+            numericas,
+            categoricas
+        )
+
+    elif analise_selecionada == "Contingência com 3 fatores":
+        exibir_contingencia_tres_fatores(
+            df,
+            categoricas
+        )
+
+except MemoryError:
+    st.error(
+        "O aplicativo ficou sem memória ao processar os dados. "
+        "Tente uma planilha menor ou reduza o número de níveis exibidos."
+    )
+
+except Exception as erro:
+    st.error(
+        "Não foi possível ler ou processar o arquivo."
+    )
+    st.exception(erro)
