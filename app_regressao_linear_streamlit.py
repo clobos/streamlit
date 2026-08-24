@@ -1,3 +1,8 @@
+#py -m venv .venv
+#.venv\Scripts\activate.bat 
+#py -m pip install --upgrade pip
+#py -m pip install streamlit openpyxl
+#py -m streamlit run app_regressao_linear_streamlit.py
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -20,33 +25,22 @@ st.markdown(
     '''
     <style>
         .block-container {
-            padding-top: 1.4rem;
+            padding-top: 3.5rem;
             padding-bottom: 2rem;
             max-width: 1400px;
         }
+
         .main-title {
-            font-size: 2.3rem;
-            font-weight: 750;
-            margin-bottom: 0.15rem;
+            font-size: 1.8rem;
+            font-weight: 700;
+            line-height: 1.25;
+            margin-bottom: 0.3rem;
         }
+
         .subtitle {
-            font-size: 1.05rem;
+            font-size: 0.95rem;
             opacity: 0.78;
             margin-bottom: 1rem;
-        }
-        .info-card {
-            border: 1px solid rgba(128,128,128,0.25);
-            border-radius: 14px;
-            padding: 1rem 1.1rem;
-            margin-bottom: 0.8rem;
-        }
-        div[data-testid="stMetric"] {
-            border: 1px solid rgba(128,128,128,0.22);
-            border-radius: 12px;
-            padding: 0.70rem;
-        }
-        code {
-            font-size: 0.90rem !important;
         }
     </style>
     ''',
